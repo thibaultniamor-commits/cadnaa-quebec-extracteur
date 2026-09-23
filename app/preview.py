@@ -105,11 +105,14 @@ def build(zone, dtm_grid, buildings=None, roads=None, contours=None, stats=None)
             for part in parts:
                 if not isinstance(part, Polygon) or part.is_empty:
                     continue
+                ring = np.asarray(part.exterior.coords)[:, :2]
+                ground_min = min(float(sample(ring[:, 0], ring[:, 1]).min()), ground_mesh)
                 items.append({
                     "id": i,
                     "o": loc(part.exterior.coords),
                     "i": [loc(r.coords) for r in part.interiors],
-                    "b": round(ground_mesh - 1.0, 2),   # base légèrement enterrée sous le terrain affiché
+                    "g": round(ground_mesh, 2),   # sol au centre (référence de la hauteur)
+                    "gm": round(ground_min, 2),   # sol le plus bas sous l'emprise (pied du volume)
                     "t": round(top, 2),
                     "h": _num(row.HAUTEUR), "s": row.H_SRC, "hl": _num(row.H_LIDAR), "ho": _num(row.H_OSM),
                     "nv": _num(row.NIVEAUX, 0), "n": row.NOM or "", "ty": row.TYPE or "",

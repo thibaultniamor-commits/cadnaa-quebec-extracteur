@@ -19,6 +19,7 @@ const ROAD_COLORS = {
 const ROAD_DEFAULT = "#4a4f57";
 const CONTOUR_COLOR = "#8a5a2b";
 const ZONE_COLOR = "#1f5fae";
+const SINK_M = 0.5; // enfoncement du pied des bâtiments sous le terrain (non exagéré)
 
 let view = null;
 
@@ -65,15 +66,25 @@ function buildBuildings(items, zref) {
   items.forEach((b, k) => {
     const shape = new THREE.Shape(b.o.map(([x, y]) => new THREE.Vector2(x, y)));
     b.i.forEach((ring) => shape.holes.push(new THREE.Path(ring.map(([x, y]) => new THREE.Vector2(x, y)))));
-    const depth = Math.max(b.t - b.b, 0.5);
+    // Pied du volume sous le point le plus bas du terrain, sommet à sol (centre) + hauteur réelle.
+    const bottom = b.gm - SINK_M, depth = Math.max(b.t - bottom, 0.5);
     let g = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false });
     g.rotateX(-Math.PI / 2);
-    g.translate(0, b.b - zref, 0);
+    g.translate(0, bottom - zref, 0);
     g.deleteAttribute("uv");
     g = g.index ? g.toNonIndexed() : g;
     const n = g.attributes.position.count;
+    const pos = g.attributes.position.array;
+    // Par sommet : altitude de référence (non exagérée) et décalage réel conservé tel quel.
+    const ref = new Float32Array(n), off = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const top = pos[i * 3 + 1] > bottom - zref + depth / 2;
+      ref[i] = (top ? b.g : b.gm) - zref;
+      off[i] = top ? b.t - b.g : -SINK_M;
+    }
     g.setAttribute("bid", new THREE.BufferAttribute(new Float32Array(n).fill(k), 1));
-    g.setAttribute("base", new THREE.BufferAttribute(new Float32Array(n).fill(b.b - zref), 1));
+    g.setAttribute("ref", new THREE.BufferAttribute(ref, 1));
+    g.setAttribute("off", new THREE.BufferAttribute(off, 1));
     g.setAttribute("color", new THREE.BufferAttribute(new Float32Array(n * 3), 3));
     g.clearGroups();
     parts.push(g);
@@ -81,7 +92,6 @@ function buildBuildings(items, zref) {
   if (!parts.length) return null;
   const geo = mergeGeometries(parts, false);
   parts.forEach((p) => p.dispose());
-  geo.userData.y0 = Float32Array.from(geo.attributes.position.array.filter((_, i) => i % 3 === 1));
   const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
   return new THREE.Mesh(geo, mat);
 }
@@ -91,9 +101,9 @@ function exaggerate(state, k) {
   [state.terrain, state.roads, state.contours, state.zone].forEach((o) => { if (o) o.scale.y = k; });
   const mesh = state.bmesh;
   if (!mesh) return;
-  const pos = mesh.geometry.attributes.position, base = mesh.geometry.attributes.base.array;
-  const y0 = mesh.geometry.userData.y0;
-  for (let i = 0; i < pos.count; i++) pos.array[i * 3 + 1] = base[i] * k + (y0[i] - base[i]);
+  const pos = mesh.geometry.attributes.position;
+  const ref = mesh.geometry.attributes.ref.array, off = mesh.geometry.attributes.off.array;
+  for (let i = 0; i < pos.count; i++) pos.array[i * 3 + 1] = ref[i] * k + off[i];
   pos.needsUpdate = true;
   mesh.geometry.computeBoundingSphere();
   mesh.geometry.computeBoundingBox();
