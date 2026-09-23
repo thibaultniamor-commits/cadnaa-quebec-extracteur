@@ -1,0 +1,168 @@
+"""Chaîne d'extraction : zone dessinée -> ZIP de shapefiles prêts pour CadnaA."""
+import datetime as dt
+import shutil
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import geopandas as gpd
+from pyproj import Transformer
+from shapely.geometry import shape
+from shapely.ops import transform as shp_transform
+
+from . import buildings, crs, roads, topo
+
+MAX_AREA_KM2 = 100.0
+ENCODING = "cp1252"  # encodage Windows lu par CadnaA (accents français)
+
+LAYERS = ("topo", "batiments", "routes")
+
+
+@dataclass
+class Options:
+    geometry: dict
+    layers: list = field(default_factory=lambda: list(LAYERS))
+    contour_interval: float = 1.0
+    dem_resolution: float | None = None  # None = automatique selon la surface
+    smoothing_m: float = 3.0
+    default_height: float = 6.0
+    crs: str = "auto"
+    dem_grid: bool = False
+
+
+def auto_resolution(area_km2):
+    if area_km2 <= 4:
+        return 1.0
+    if area_km2 <= 25:
+        return 2.0
+    return 5.0
+
+
+def _write(gdf, path, epsg):
+    gdf = gdf.set_crs(epsg, allow_override=True)
+    gdf.to_file(path, driver="ESRI Shapefile", encoding=ENCODING, engine="pyogrio")
+
+
+def run(opts: Options, out_dir: Path, progress=lambda msg: None) -> tuple[Path, dict]:
+    t0 = time.time()
+    zone_ll = shape(opts.geometry)
+    if zone_ll.geom_type != "Polygon" or not zone_ll.is_valid:
+        raise ValueError("La zone doit être un polygone valide.")
+    c = zone_ll.centroid
+    if not crs.in_quebec(c.x, c.y):
+        raise ValueError("La zone doit être située au Québec.")
+    epsg = crs.resolve(opts.crs, c.x)
+    to_proj = Transformer.from_crs(4326, epsg, always_xy=True).transform
+    zone = shp_transform(to_proj, zone_ll)
+    area_km2 = zone.area / 1e6
+    if area_km2 > MAX_AREA_KM2:
+        raise ValueError(f"Zone trop grande ({area_km2:.1f} km², maximum {MAX_AREA_KM2:.0f} km²).")
+    progress(f"Zone : {area_km2:.2f} km² — projection {crs.name(epsg)} (EPSG:{epsg})")
+
+    stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    folder = out_dir / f"cadnaa_qc_{stamp}"
+    folder.mkdir(parents=True, exist_ok=True)
+    bbox_ll = zone_ll.buffer(0.001).bounds
+    summary = {"zone_km2": round(area_km2, 3), "epsg": epsg, "crs": crs.name(epsg)}
+
+    _write(gpd.GeoDataFrame({"NOM": ["Zone d'étude"], "SURF_KM2": [round(area_km2, 3)]}, geometry=[zone]),
+           folder / "zone_etude.shp", epsg)
+
+    dtm = grid = None
+    if "topo" in opts.layers:
+        res = opts.dem_resolution or auto_resolution(area_km2)
+        grid = topo.Grid.covering(zone.buffer(3 * res + opts.smoothing_m * 3).bounds, res, f"EPSG:{epsg}")
+        progress(f"Topographie : lecture du MNT à {res:g} m ({grid.width}×{grid.height} px)…")
+        dtm, lidar_frac = topo.build_dtm(bbox_ll, grid)
+        progress(f"Topographie : couverture LiDAR {lidar_frac:.0%} (reste : MRDEM 30 m). Calcul des courbes…")
+        lines = topo.contours(dtm, grid, opts.contour_interval, zone, opts.smoothing_m)
+        gdf = gpd.GeoDataFrame({"ALTITUDE": [z for z, _ in lines]}, geometry=[g for _, g in lines])
+        _write(gdf, folder / "courbes_niveau.shp", epsg)
+        if opts.dem_grid:
+            topo.write_ascii_grid(folder / "mnt.asc", dtm, grid)
+        summary.update(courbes=len(gdf), mnt_resolution_m=res, couverture_lidar=round(lidar_frac, 3),
+                       equidistance_m=opts.contour_interval)
+        progress(f"Topographie : {len(gdf)} courbes de niveau.")
+
+    if "batiments" in opts.layers:
+        progress("Bâtiments : téléchargement OpenStreetMap…")
+        b = buildings.clean(buildings.fetch_osm(zone_ll).to_crs(epsg), zone)
+        progress(f"Bâtiments : {len(b)} emprises. Calcul des hauteurs LiDAR…")
+        h = ground = None
+        if len(b):
+            hres = 1.0 if area_km2 <= 30 else 2.0
+            hgrid = topo.Grid.covering(b.total_bounds, hres, f"EPSG:{epsg}")
+            b_dtm, b_dsm = topo.lidar_surfaces(bbox_ll, hgrid, want_dsm=True)
+            h, ground = buildings.lidar_heights(b, hgrid, b_dtm, b_dsm)
+        else:
+            h = ground = []
+        b = buildings.assign_heights(b, h, ground, opts.default_height)
+        _write(b, folder / "batiments.shp", epsg)
+        counts = b["H_SRC"].value_counts().to_dict() if len(b) else {}
+        summary.update(batiments=len(b), hauteurs=counts)
+        progress(f"Bâtiments : {len(b)} — sources des hauteurs {counts}")
+
+    if "routes" in opts.layers:
+        progress("Routes : interrogation AQréseau+…")
+        r = roads.clip(roads.fetch(zone_ll).to_crs(epsg), zone)
+        _write(r, folder / "routes.shp", epsg)
+        summary.update(routes=len(r), routes_km=round(float(r.geometry.length.sum()) / 1000, 2))
+        progress(f"Routes : {len(r)} tronçons ({summary['routes_km']} km).")
+
+    (folder / "LISEZMOI.txt").write_text(_readme(opts, summary), encoding="utf-8")
+    zip_path = Path(shutil.make_archive(str(folder), "zip", folder))
+    shutil.rmtree(folder, ignore_errors=True)
+    summary["duree_s"] = round(time.time() - t0, 1)
+    progress(f"Terminé en {summary['duree_s']} s.")
+    return zip_path, summary
+
+
+def _readme(opts, s):
+    lines = [
+        "Extraction CadnaA - Québec",
+        f"Généré le {dt.datetime.now():%Y-%m-%d %H:%M}",
+        f"Système de coordonnées : {s['crs']} (EPSG:{s['epsg']}) - unités en mètres",
+        f"Surface de la zone : {s['zone_km2']} km²",
+        "",
+        "FICHIERS",
+        "  zone_etude.shp      Polygone de la zone sélectionnée",
+    ]
+    if "courbes" in s:
+        lines += [
+            f"  courbes_niveau.shp  {s['courbes']} courbes de niveau 3D (PolylineZ), équidistance {s['equidistance_m']} m",
+            "                      ALTITUDE : altitude (m, CGVD2013). La coordonnée Z porte aussi l'altitude.",
+            f"                      MNT {s['mnt_resolution_m']} m, couverture LiDAR {s['couverture_lidar']:.0%}",
+        ]
+        if opts.dem_grid:
+            lines.append("  mnt.asc             MNT en grille ESRI ASCII (même projection)")
+    if "batiments" in s:
+        lines += [
+            f"  batiments.shp       {s['batiments']} bâtiments (polygones)",
+            "                      HAUTEUR : hauteur retenue (m, relative au sol)",
+            "                      H_SRC   : LIDAR (DSM-DTM médian) | OSM_H (tag height) | OSM_NIV (niveaux x 3 m) | DEFAUT",
+            "                      H_LIDAR, H_OSM, NIVEAUX : valeurs brutes pour contrôle ; ALT_SOL : altitude du sol (m)",
+            f"                      Répartition des sources : {s.get('hauteurs')}",
+        ]
+    if "routes" in s:
+        lines += [
+            f"  routes.shp          {s['routes']} tronçons ({s['routes_km']} km, polylignes)",
+            "                      NOM, NO_RTE, CLASSE (classe AQréseau+), CLS_AQ, CARACT, GESTION, LONG_M",
+            "                      VIT_DEF : vitesse INDICATIVE selon la classe - à valider (pas de débits de trafic)",
+        ]
+    lines += [
+        "",
+        "IMPORT DANS CADNAA",
+        "  Fichier > Importer, format ArcView Shape (*.shp), un fichier à la fois.",
+        "  Dans les options d'import, affecter le type d'objet et les attributs :",
+        "    courbes_niveau.shp -> Courbe de niveau ; hauteur = coordonnée Z (ou attribut ALTITUDE)",
+        "    batiments.shp      -> Bâtiment ; hauteur = HAUTEUR (relative)",
+        "    routes.shp         -> Route ; nom = NOM ; vitesse = VIT_DEF (à vérifier)",
+        "    zone_etude.shp     -> Limite de calcul (facultatif)",
+        "",
+        "SOURCES ET LICENCES",
+        "  Topographie : RNCan - MNEHR/HRDEM 1 m et MNEMR/MRDEM 30 m - Licence du gouvernement ouvert - Canada",
+        "  Bâtiments   : © contributeurs OpenStreetMap - ODbL 1.0 ; hauteurs dérivées du HRDEM (RNCan)",
+        "  Routes      : Adresses Québec / AQréseau+ - MRNF, gouvernement du Québec - CC-BY 4.0",
+        "  Les données sont fournies à titre indicatif : vérifier avant toute étude réglementaire.",
+    ]
+    return "\r\n".join(lines) + "\r\n"

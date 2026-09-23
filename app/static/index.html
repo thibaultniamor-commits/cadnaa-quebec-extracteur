@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Extracteur CadnaA Québec</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.css">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="map"></div>
+
+  <aside id="panel">
+    <header>
+      <h1>Extracteur CadnaA</h1>
+      <p class="sub">Topographie, bâtiments et routes — Québec</p>
+    </header>
+
+    <section>
+      <h2><span class="step">1</span> Zone d'étude</h2>
+      <form id="search" class="row">
+        <input id="q" type="search" placeholder="Rechercher une adresse, une ville…">
+        <button type="submit" class="ghost">Aller</button>
+      </form>
+      <div class="row">
+        <button id="draw-rect" type="button">Rectangle</button>
+        <button id="draw-poly" type="button">Polygone</button>
+        <button id="clear" type="button" class="ghost">Effacer</button>
+      </div>
+      <div id="zone-info" class="info muted">Dessinez la zone sur la carte.</div>
+    </section>
+
+    <section>
+      <h2><span class="step">2</span> Couches</h2>
+      <label class="check"><input type="checkbox" name="layer" value="topo" checked> Topographie (courbes de niveau)</label>
+      <div class="sub-opts">
+        <label>Équidistance
+          <select id="interval">
+            <option value="0.5">0,5 m</option>
+            <option value="1" selected>1 m</option>
+            <option value="2">2 m</option>
+            <option value="5">5 m</option>
+            <option value="10">10 m</option>
+          </select>
+        </label>
+        <label>Résolution MNT
+          <select id="resolution">
+            <option value="" selected>Auto</option>
+            <option value="1">1 m</option>
+            <option value="2">2 m</option>
+            <option value="5">5 m</option>
+            <option value="10">10 m</option>
+          </select>
+        </label>
+        <label>Lissage
+          <select id="smoothing">
+            <option value="0">Aucun</option>
+            <option value="3" selected>3 m</option>
+            <option value="6">6 m</option>
+            <option value="10">10 m</option>
+          </select>
+        </label>
+        <label class="check small"><input type="checkbox" id="dem-grid"> Joindre le MNT en grille ASCII (.asc)</label>
+      </div>
+
+      <label class="check"><input type="checkbox" name="layer" value="batiments" checked> Bâtiments (avec hauteurs)</label>
+      <div class="sub-opts">
+        <label>Hauteur par défaut
+          <span class="unit"><input id="default-height" type="number" min="1" max="100" step="0.5" value="6"> m</span>
+        </label>
+      </div>
+
+      <label class="check"><input type="checkbox" name="layer" value="routes" checked> Routes (AQréseau+)</label>
+    </section>
+
+    <section>
+      <h2><span class="step">3</span> Projection</h2>
+      <select id="crs">
+        <option value="auto" selected>MTM automatique (NAD83 CSRS)</option>
+        <option value="mtm3">MTM zone 3</option><option value="mtm4">MTM zone 4</option>
+        <option value="mtm5">MTM zone 5</option><option value="mtm6">MTM zone 6</option>
+        <option value="mtm7">MTM zone 7</option><option value="mtm8">MTM zone 8</option>
+        <option value="mtm9">MTM zone 9</option><option value="mtm10">MTM zone 10</option>
+        <option value="lambert">Lambert Québec (EPSG:32198)</option>
+      </select>
+    </section>
+
+    <section>
+      <button id="go" type="button" class="primary" disabled>Générer le ZIP</button>
+      <ol id="log"></ol>
+      <a id="download" class="primary hidden" href="#">Télécharger le ZIP</a>
+    </section>
+
+    <footer>
+      Sources : RNCan (HRDEM/MRDEM), © OpenStreetMap (ODbL), Adresses Québec – MRNF (CC-BY 4.0)
+    </footer>
+  </aside>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

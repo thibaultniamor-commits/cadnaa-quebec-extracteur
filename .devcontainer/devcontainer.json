@@ -1,0 +1,15 @@
+{
+  "name": "Extracteur CadnaA - Québec",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "hostRequirements": { "cpus": 2, "memory": "8gb" },
+  "postCreateCommand": "pip install --user -r requirements.txt",
+  "postAttachCommand": "python -m uvicorn app.main:app --host 0.0.0.0 --port 8000",
+  "forwardPorts": [8000],
+  "portsAttributes": {
+    "8000": { "label": "Interface CadnaA", "onAutoForward": "openBrowser" }
+  },
+  "customizations": {
+    "codespaces": { "openFiles": ["README.md"] },
+    "vscode": { "extensions": ["ms-python.python"] }
+  }
+}
