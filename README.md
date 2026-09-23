@@ -28,6 +28,11 @@ Le premier lancement crée `.venv` et installe les dépendances, puis ouvre
 1. Rechercher un lieu, dessiner un **rectangle** ou un **polygone** (modifiable à la souris).
 2. Choisir les couches et options.
 3. **Générer le ZIP**. Le téléchargement démarre automatiquement.
+4. **Aperçu 3D (validation)** : terrain, bâtiments extrudés, routes, courbes de niveau et limite de zone.
+   - Bâtiments colorés par source de hauteur (LiDAR, OSM, défaut) ou par hauteur.
+   - Clic sur un bâtiment pour afficher `HAUTEUR`, `H_SRC`, `H_LIDAR`, `H_OSM`, `NIVEAUX`.
+   - Exagération du relief réglable (les hauteurs des bâtiments restent réelles).
+   - Le terrain affiché est allégé (300 × 300 mailles au maximum). Les shapefiles gardent la pleine résolution.
 
 Ligne de commande (tests) :
 
@@ -77,6 +82,7 @@ app/
   buildings.py  Bâtiments OSM + hauteurs LiDAR
   roads.py      Routes AQréseau+
   crs.py        Projections MTM / Lambert
+  preview.py    Données de l'aperçu 3D (JSON)
   cli.py        Extraction en ligne de commande
-  static/       Interface (Leaflet + Geoman)
+  static/       Interface (Leaflet + Geoman) et aperçu 3D (three.js, viewer.js)
 ```

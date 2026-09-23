@@ -138,7 +138,7 @@ $("go").onclick = async () => {
     dem_grid: $("dem-grid").checked,
   };
   $("log").innerHTML = "";
-  $("download").classList.add("hidden");
+  $("results").classList.add("hidden");
   $("go").disabled = true;
   $("go").textContent = "Extraction en cours…";
   try {
@@ -164,10 +164,10 @@ async function poll(jobId) {
     shown = d.messages.length;
     if (d.status === "termine") {
       log("ZIP prêt.", "ok");
-      const a = $("download");
-      a.href = `/api/jobs/${jobId}/download`;
-      a.classList.remove("hidden");
-      a.click();
+      $("download").href = `/api/jobs/${jobId}/download`;
+      $("open-3d").onclick = () => window.openViewer(jobId);
+      $("results").classList.remove("hidden");
+      $("download").click();
       return;
     }
     if (d.status === "erreur") { log(d.error, "err"); return; }

@@ -89,7 +89,10 @@
     <section>
       <button id="go" type="button" class="primary" disabled>Générer le ZIP</button>
       <ol id="log"></ol>
-      <a id="download" class="primary hidden" href="#">Télécharger le ZIP</a>
+      <div id="results" class="hidden">
+        <a id="download" class="primary" href="#">Télécharger le ZIP</a>
+        <button id="open-3d" type="button">Aperçu 3D (validation)</button>
+      </div>
     </section>
 
     <footer>
@@ -97,6 +100,39 @@
     </footer>
   </aside>
 
+  <div id="viewer" class="hidden" role="dialog" aria-label="Aperçu 3D">
+    <div id="viewer-canvas"></div>
+    <div id="viewer-bar">
+      <span id="viewer-title"></span>
+      <button id="viewer-close" type="button" class="ghost" title="Fermer (Échap)">Fermer ✕</button>
+    </div>
+    <div id="viewer-panel">
+      <h3>Couches</h3>
+      <label class="check small"><input type="checkbox" id="v-terrain" checked> Terrain (MNT)</label>
+      <label class="check small"><input type="checkbox" id="v-buildings" checked> Bâtiments</label>
+      <label class="check small"><input type="checkbox" id="v-roads" checked> Routes</label>
+      <label class="check small"><input type="checkbox" id="v-contours"> Courbes de niveau</label>
+      <label class="check small"><input type="checkbox" id="v-zone" checked> Limite de zone</label>
+      <h3>Exagération du relief <span id="v-exag-val">×1</span></h3>
+      <input type="range" id="v-exag" min="1" max="5" step="0.5" value="1">
+      <p class="hint" style="margin-top:2px">Les hauteurs des bâtiments restent à l'échelle réelle.</p>
+      <h3>Couleur des bâtiments</h3>
+      <select id="v-mode">
+        <option value="source" selected>Source de la hauteur</option>
+        <option value="height">Hauteur</option>
+      </select>
+      <div id="viewer-legend"></div>
+      <p class="hint">Glisser : rotation · Clic droit : déplacement · Molette : zoom · Clic sur un bâtiment : attributs</p>
+    </div>
+    <div id="viewer-pick" class="hidden"></div>
+  </div>
+
+  <script type="importmap">
+    { "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/" } }
+  </script>
+  <script type="module" src="/static/viewer.js"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.js"></script>
   <script src="/static/app.js"></script>

@@ -10,7 +10,7 @@ from pyproj import Transformer
 from shapely.geometry import shape
 from shapely.ops import transform as shp_transform
 
-from . import buildings, crs, roads, topo
+from . import buildings, crs, preview, roads, topo
 
 MAX_AREA_KM2 = 100.0
 ENCODING = "cp1252"  # encodage Windows lu par CadnaA (accents français)
@@ -68,7 +68,7 @@ def run(opts: Options, out_dir: Path, progress=lambda msg: None) -> tuple[Path, 
     _write(gpd.GeoDataFrame({"NOM": ["Zone d'étude"], "SURF_KM2": [round(area_km2, 3)]}, geometry=[zone]),
            folder / "zone_etude.shp", epsg)
 
-    dtm = grid = None
+    dtm = grid = contours_gdf = b = r = None
     if "topo" in opts.layers:
         res = opts.dem_resolution or auto_resolution(area_km2)
         grid = topo.Grid.covering(zone.buffer(3 * res + opts.smoothing_m * 3).bounds, res, f"EPSG:{epsg}")
@@ -78,6 +78,7 @@ def run(opts: Options, out_dir: Path, progress=lambda msg: None) -> tuple[Path, 
         lines = topo.contours(dtm, grid, opts.contour_interval, zone, opts.smoothing_m)
         gdf = gpd.GeoDataFrame({"ALTITUDE": [z for z, _ in lines]}, geometry=[g for _, g in lines])
         _write(gdf, folder / "courbes_niveau.shp", epsg)
+        contours_gdf = gdf
         if opts.dem_grid:
             topo.write_ascii_grid(folder / "mnt.asc", dtm, grid)
         summary.update(courbes=len(gdf), mnt_resolution_m=res, couverture_lidar=round(lidar_frac, 3),
@@ -112,6 +113,11 @@ def run(opts: Options, out_dir: Path, progress=lambda msg: None) -> tuple[Path, 
     (folder / "LISEZMOI.txt").write_text(_readme(opts, summary), encoding="utf-8")
     zip_path = Path(shutil.make_archive(str(folder), "zip", folder))
     shutil.rmtree(folder, ignore_errors=True)
+
+    progress("Aperçu 3D : préparation…")
+    data = preview.build(zone, preview.terrain(dtm, grid, zone, bbox_ll, epsg), buildings=b, roads=r,
+                         contours=contours_gdf, stats=summary)
+    preview.write(preview.path_for(zip_path), data)
     summary["duree_s"] = round(time.time() - t0, 1)
     progress(f"Terminé en {summary['duree_s']} s.")
     return zip_path, summary

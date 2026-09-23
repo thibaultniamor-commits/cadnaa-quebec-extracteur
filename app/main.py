@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import crs, pipeline
+from . import crs, pipeline, preview
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT = ROOT.parent / "output"
@@ -91,3 +91,14 @@ def download(job_id: str):
         raise HTTPException(409, "Extraction non terminée.")
     path = Path(job["file"])
     return FileResponse(path, media_type="application/zip", filename=path.name)
+
+
+@app.get("/api/jobs/{job_id}/preview")
+def preview_data(job_id: str):
+    job = _job(job_id)
+    if job["status"] != "termine":
+        raise HTTPException(409, "Extraction non terminée.")
+    path = preview.path_for(Path(job["file"]))
+    if not path.exists():
+        raise HTTPException(404, "Aperçu indisponible.")
+    return FileResponse(path, media_type="application/json")
