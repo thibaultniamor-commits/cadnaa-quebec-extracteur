@@ -136,6 +136,7 @@ $("go").onclick = async () => {
     default_height: Number($("default-height").value) || 6,
     crs: $("crs").value,
     dem_grid: $("dem-grid").checked,
+    traffic: $("traffic").checked,
   };
   $("log").innerHTML = "";
   $("results").classList.add("hidden");

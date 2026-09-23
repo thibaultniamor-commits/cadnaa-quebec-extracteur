@@ -120,8 +120,9 @@ def build(zone, dtm_grid, buildings=None, roads=None, contours=None, stats=None)
         out["buildings"] = items
 
     if roads is not None:
-        out["roads"] = [{"c": draped(g, 0.4), "k": k, "n": n}
-                        for g, k, n in zip(roads.geometry, roads.CLASSE, roads.NOM)]
+        djma = roads["DJMA"] if "DJMA" in roads else [None] * len(roads)
+        out["roads"] = [{"c": draped(g, 0.4), "k": k, "n": n, "d": _num(d, 0)}
+                        for g, k, n, d in zip(roads.geometry, roads.CLASSE, roads.NOM, djma)]
 
     if contours is not None and len(contours):
         levels = sorted(contours.ALTITUDE.unique())

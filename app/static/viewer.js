@@ -17,6 +17,15 @@ const ROAD_COLORS = {
   Autoroute: "#c0392b", Nationale: "#e67e22", "Régionale": "#e6a822", Collectrice: "#d4b000",
 };
 const ROAD_DEFAULT = "#4a4f57";
+const DJMA_CLASSES = [
+  [100000, "#7a0177", "> 100 000"], [50000, "#c51b8a", "50 000 – 100 000"], [20000, "#f768a1", "20 000 – 50 000"],
+  [5000, "#fbb4b9", "5 000 – 20 000"], [0, "#feebe2", "< 5 000"],
+];
+const DJMA_NONE = "#9aa0a8";
+const roadColor = {
+  class: (r) => ROAD_COLORS[r.k] || ROAD_DEFAULT,
+  djma: (r) => (r.d === null || r.d === undefined ? DJMA_NONE : DJMA_CLASSES.find(([min]) => r.d >= min)[1]),
+};
 const CONTOUR_COLOR = "#8a5a2b";
 const ZONE_COLOR = "#1f5fae";
 const SINK_M = 0.5; // enfoncement du pied des bâtiments sous le terrain (non exagéré)
@@ -167,9 +176,9 @@ function createView(data) {
   const bmesh = buildBuildings(items, zref);
   if (bmesh) world.add(bmesh);
 
-  const roads = data.roads ? buildLines(data.roads.map((r) => ({ pts: r.c, k: r.k })), zref,
-    (r) => ROAD_COLORS[r.k] || ROAD_DEFAULT) : null;
-  if (roads) world.add(roads);
+  const roads = data.roads ? buildLines(data.roads.map((r) => ({ pts: r.c, k: r.k, d: r.d })), zref,
+    roadColor.class) : null;
+  if (roads) { roads.userData.items = data.roads; world.add(roads); }
 
   const contours = data.contours ? buildLines(
     data.contours.map((c) => ({ pts: c.c.map(([x, y]) => [x, y, c.z + 0.15]) })), zref, () => CONTOUR_COLOR) : null;
@@ -243,6 +252,29 @@ function select(state, k) {
   box.classList.remove("hidden");
 }
 
+// Recolore les segments de routes (2 sommets par segment, dans l'ordre de construction).
+function colorRoads(state, mode) {
+  const roads = state.roads;
+  if (!roads) return;
+  const col = roads.geometry.attributes.color;
+  const c = new THREE.Color();
+  let v = 0;
+  roads.userData.items.forEach((r) => {
+    c.set(roadColor[mode](r));
+    for (let s = 0; s < r.c.length - 1; s++, v += 2) { c.toArray(col.array, v * 3); c.toArray(col.array, v * 3 + 3); }
+  });
+  col.needsUpdate = true;
+  const el = $("viewer-road-legend");
+  if (mode === "djma") {
+    const n = roads.userData.items.filter((r) => r.d !== null && r.d !== undefined).length;
+    el.innerHTML = DJMA_CLASSES.map(([, col, label]) => `<div><i style="background:${col}"></i>${label} véh/j</div>`).join("")
+      + `<div><i style="background:${DJMA_NONE}"></i>Sans donnée <span class="muted">(${roads.userData.items.length - n})</span></div>`;
+  } else {
+    el.innerHTML = Object.entries(ROAD_COLORS).map(([k, col]) => `<div><i style="background:${col}"></i>${k}</div>`).join("")
+      + `<div><i style="background:${ROAD_DEFAULT}"></i>Autres</div>`;
+  }
+}
+
 function legend(state) {
   const el = $("viewer-legend");
   if (state.mode === "source") {
@@ -275,6 +307,7 @@ function summary(data) {
   if (s.couverture_lidar !== undefined) parts.push(`LiDAR ${Math.round(s.couverture_lidar * 100)} %`);
   if (s.batiments !== undefined) parts.push(`${s.batiments} bâtiments`);
   if (s.routes !== undefined) parts.push(`${s.routes} tronçons`);
+  if (s.routes_djma !== undefined) parts.push(`DJMA sur ${s.routes_djma} tronçons (${s.routes_djma_km} km)`);
   if (data.contour_step > 1) parts.push(`courbes affichées : 1 sur ${data.contour_step}`);
   return parts.join(" · ");
 }
@@ -299,6 +332,7 @@ function bindControls() {
     colorBuildings(view.bmesh, view.items, view.mode, view.selected);
     legend(view);
   };
+  $("v-road-mode").onchange = (e) => { if (view) colorRoads(view, e.target.value); };
   $("viewer-close").onclick = closeViewer;
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && view) closeViewer(); });
 }
@@ -324,6 +358,7 @@ window.openViewer = async (jobId) => {
     view.mode = $("v-mode").value;
     colorBuildings(view.bmesh, view.items, view.mode, -1);
     legend(view);
+    colorRoads(view, $("v-road-mode").value);
     $("viewer-pick").classList.add("hidden");
   } catch (err) {
     $("viewer-title").textContent = `Aperçu indisponible : ${err.message}`;

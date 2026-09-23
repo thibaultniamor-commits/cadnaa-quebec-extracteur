@@ -10,7 +10,7 @@ from pyproj import Transformer
 from shapely.geometry import shape
 from shapely.ops import transform as shp_transform
 
-from . import buildings, crs, preview, roads, topo
+from . import buildings, crs, preview, roads, topo, traffic
 
 MAX_AREA_KM2 = 100.0
 ENCODING = "cp1252"  # encodage Windows lu par CadnaA (accents français)
@@ -28,6 +28,7 @@ class Options:
     default_height: float = 6.0
     crs: str = "auto"
     dem_grid: bool = False
+    traffic: bool = True  # débits MTMD rattachés aux routes
 
 
 def auto_resolution(area_km2):
@@ -106,9 +107,20 @@ def run(opts: Options, out_dir: Path, progress=lambda msg: None) -> tuple[Path, 
     if "routes" in opts.layers:
         progress("Routes : interrogation AQréseau+…")
         r = roads.clip(roads.fetch(zone_ll).to_crs(epsg), zone)
-        _write(r, folder / "routes.shp", epsg)
         summary.update(routes=len(r), routes_km=round(float(r.geometry.length.sum()) / 1000, 2))
         progress(f"Routes : {len(r)} tronçons ({summary['routes_km']} km).")
+        if opts.traffic:
+            progress("Débits : sections de trafic MTMD…")
+            sections = traffic.fetch(zone_ll).to_crs(epsg)
+            r, sections = traffic.attach(r, sections, zone)
+            if len(sections):
+                _write(sections, folder / "sections_trafic_mtmd.shp", epsg)
+            with_djma = r.DJMA_SRC == "MTMD"
+            summary.update(sections_mtmd=len(sections), routes_djma=int(with_djma.sum()),
+                           routes_djma_km=round(float(r.geometry[with_djma].length.sum()) / 1000, 2))
+            progress(f"Débits : {len(sections)} sections MTMD, DJMA rattaché à {summary['routes_djma']} tronçons "
+                     f"({summary['routes_djma_km']} km).")
+        _write(r, folder / "routes.shp", epsg)
 
     (folder / "LISEZMOI.txt").write_text(_readme(opts, summary), encoding="utf-8")
     zip_path = Path(shutil.make_archive(str(folder), "zip", folder))
@@ -153,8 +165,20 @@ def _readme(opts, s):
         lines += [
             f"  routes.shp          {s['routes']} tronçons ({s['routes_km']} km, polylignes)",
             "                      NOM, NO_RTE, CLASSE (classe AQréseau+), CLS_AQ, CARACT, GESTION, LONG_M",
-            "                      VIT_DEF : vitesse INDICATIVE selon la classe - à valider (pas de débits de trafic)",
+            "                      VIT_DEF : vitesse INDICATIVE selon la classe - à valider",
         ]
+        if "sections_mtmd" in s:
+            lines += [
+                f"                      Débits MTMD rattachés à {s['routes_djma']} tronçons ({s['routes_djma_km']} km) :",
+                "                      DJMA / DJME / DJMH : débits journaliers moyens annuel / estival / hivernal,",
+                "                        TOTAL DES DEUX SENS (véh/j) ; AN_DJMA : année ; PCT_CAM : % camions ;",
+                "                        H30 : débit de la 30e heure (véh/h)",
+                "                      NB_CHAUS : 1 ou 2 chaussées détectées ; DJMA_CH = DJMA / NB_CHAUS (débit par chaussée,",
+                "                        à utiliser si chaque chaussée est une source distincte dans CadnaA)",
+                "                      SECT_MTMD : n° de section ; RECOUVR : % du tronçon dans le couloir de la section",
+                "                      Tronçons sans DJMA : réseau municipal non couvert par le MTMD (à compléter).",
+                f"  sections_trafic_mtmd.shp  {s['sections_mtmd']} sections de trafic MTMD brutes (contrôle du rattachement)",
+            ]
     lines += [
         "",
         "IMPORT DANS CADNAA",
@@ -162,13 +186,14 @@ def _readme(opts, s):
         "  Dans les options d'import, affecter le type d'objet et les attributs :",
         "    courbes_niveau.shp -> Courbe de niveau ; hauteur = coordonnée Z (ou attribut ALTITUDE)",
         "    batiments.shp      -> Bâtiment ; hauteur = HAUTEUR (relative)",
-        "    routes.shp         -> Route ; nom = NOM ; vitesse = VIT_DEF (à vérifier)",
+        "    routes.shp         -> Route ; nom = NOM ; vitesse = VIT_DEF (à vérifier) ; DTV/DJMA = DJMA_CH ; % PL = PCT_CAM",
         "    zone_etude.shp     -> Limite de calcul (facultatif)",
         "",
         "SOURCES ET LICENCES",
         "  Topographie : RNCan - MNEHR/HRDEM 1 m et MNEMR/MRDEM 30 m - Licence du gouvernement ouvert - Canada",
         "  Bâtiments   : © contributeurs OpenStreetMap - ODbL 1.0 ; hauteurs dérivées du HRDEM (RNCan)",
         "  Routes      : Adresses Québec / AQréseau+ - MRNF, gouvernement du Québec - CC-BY 4.0",
+        "  Débits      : Débit de circulation - ministère des Transports et de la Mobilité durable - CC-BY 4.0",
         "  Les données sont fournies à titre indicatif : vérifier avant toute étude réglementaire.",
     ]
     return "\r\n".join(lines) + "\r\n"

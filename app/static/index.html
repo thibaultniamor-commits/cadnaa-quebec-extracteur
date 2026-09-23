@@ -72,6 +72,9 @@
       </div>
 
       <label class="check"><input type="checkbox" name="layer" value="routes" checked> Routes (AQréseau+)</label>
+      <div class="sub-opts">
+        <label class="check small"><input type="checkbox" id="traffic" checked> Débits MTMD (DJMA, % camions)</label>
+      </div>
     </section>
 
     <section>
@@ -122,6 +125,12 @@
         <option value="height">Hauteur</option>
       </select>
       <div id="viewer-legend"></div>
+      <h3>Couleur des routes</h3>
+      <select id="v-road-mode">
+        <option value="class" selected>Classe</option>
+        <option value="djma">DJMA (MTMD)</option>
+      </select>
+      <div id="viewer-road-legend"></div>
       <p class="hint">Glisser : rotation · Clic droit : déplacement · Molette : zoom · Clic sur un bâtiment : attributs</p>
     </div>
     <div id="viewer-pick" class="hidden"></div>

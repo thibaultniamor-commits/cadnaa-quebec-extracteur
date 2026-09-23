@@ -33,6 +33,7 @@ class ExtractRequest(BaseModel):
     default_height: float = Field(6.0, gt=0, le=300)
     crs: str = "auto"
     dem_grid: bool = False
+    traffic: bool = True
 
 
 @app.get("/")
