@@ -30,6 +30,7 @@ class Options:
     crs: str = "auto"
     dem_grid: bool = False
     traffic: bool = True  # débits MTMD rattachés aux routes
+    dem_source: str = "foretouverte"  # foretouverte (MRNF, CGVD28) | hrdem (RNCan, CGVD2013)
 
 
 def auto_resolution(area_km2):
@@ -59,6 +60,7 @@ class Extraction:
     buildings: gpd.GeoDataFrame | None = None
     roads: gpd.GeoDataFrame | None = None
     sections: gpd.GeoDataFrame | None = None
+    dem_info: topo.DemInfo | None = None
     terrain: tuple | None = None                # (z, grid) de l'aperçu 3D, repère des volumes
     projets: gpd.GeoDataFrame | None = None     # bâtiments projetés saisis sur un plan calé
     projets_items: list = field(default_factory=list)
@@ -86,19 +88,23 @@ def extract(opts: Options, out_dir: Path, progress=lambda msg: None) -> Extracti
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     bbox_ll = zone_ll.buffer(0.001).bounds
-    summary = {"zone_km2": round(area_km2, 3), "epsg": epsg, "crs": crs.name(epsg)}
+    summary = {"zone_km2": round(area_km2, 3), "epsg": epsg, "crs": crs.name(epsg), "alt_ref": "CGVD2013"}
     ex = Extraction(opts, epsg, zone, summary, out_dir / f"cadnaa_qc_{stamp}_apercu.json")
 
     if "topo" in opts.layers:
         res = opts.dem_resolution or auto_resolution(area_km2)
         grid = topo.Grid.covering(zone.buffer(3 * res + opts.smoothing_m * 3).bounds, res, f"EPSG:{epsg}")
         progress(f"Topographie : lecture du MNT à {res:g} m ({grid.width}×{grid.height} px)…")
-        dtm, lidar_frac = topo.build_dtm(bbox_ll, grid)
-        progress(f"Topographie : couverture LiDAR {lidar_frac:.0%} (reste : MRDEM 30 m). Calcul des courbes…")
+        dtm, info = topo.build_dtm(bbox_ll, grid, opts.dem_source, progress)
+        ex.dem_info = info
+        progress(f"Topographie : {_dem_sources(info)}, altitudes {info.datum}. Calcul des courbes…")
         lines = topo.contours(dtm, grid, opts.contour_interval, zone, opts.smoothing_m)
         ex.contours = gpd.GeoDataFrame({"ALTITUDE": [z for z, _ in lines]}, geometry=[g for _, g in lines])
         ex.dtm, ex.grid = dtm, grid
-        summary.update(courbes=len(ex.contours), mnt_resolution_m=res, couverture_lidar=round(lidar_frac, 3),
+        summary["alt_ref"] = info.datum
+        summary.update(courbes=len(ex.contours), mnt_resolution_m=res, couverture_lidar=round(info.lidar, 3),
+                       mnt_sources={k: round(v, 3) for k, v in info.parts.items() if v},
+                       mnt_feuillets=info.feuillets, mnt_annees=info.annees, ecart_cgvd_m=info.offset,
                        equidistance_m=opts.contour_interval)
         progress(f"Topographie : {len(ex.contours)} courbes de niveau.")
 
@@ -112,6 +118,8 @@ def extract(opts: Options, out_dir: Path, progress=lambda msg: None) -> Extracti
             hgrid = topo.Grid.covering(b.total_bounds, hres, f"EPSG:{epsg}")
             b_dtm, b_dsm = topo.lidar_surfaces(bbox_ll, hgrid, want_dsm=True)
             h, ground = buildings.lidar_heights(b, hgrid, b_dtm, b_dsm)
+            if ex.dem_info is not None and ex.dem_info.datum == "CGVD28" and ex.dem_info.offset is not None:
+                ground = ground + ex.dem_info.offset  # sol HRDEM ramené dans la référence du MNT
         else:
             h = ground = []
         ex.buildings = b = buildings.assign_heights(b, h, ground, opts.default_height)
@@ -223,8 +231,11 @@ def _readme(opts, s, ex=None):
     if "courbes" in s:
         lines += [
             f"  courbes_niveau.shp  {s['courbes']} courbes de niveau 3D (PolylineZ), équidistance {s['equidistance_m']} m",
-            "                      ALTITUDE : altitude (m, CGVD2013). La coordonnée Z porte aussi l'altitude.",
+            f"                      ALTITUDE : altitude (m, {s['alt_ref']}). La coordonnée Z porte aussi l'altitude.",
+            f"                      MNT {s['mnt_resolution_m']} m : {_dem_sources(ex.dem_info)}"
+            if ex is not None and ex.dem_info is not None else
             f"                      MNT {s['mnt_resolution_m']} m, couverture LiDAR {s['couverture_lidar']:.0%}",
+            *_readme_dem(ex),
         ]
         if opts.dem_grid:
             lines.append("  mnt.asc             MNT en grille ESRI ASCII (même projection)")
@@ -233,7 +244,8 @@ def _readme(opts, s, ex=None):
             f"  batiments.shp       {s['batiments']} bâtiments (polygones)",
             "                      HAUTEUR : hauteur retenue (m, relative au sol)",
             "                      H_SRC   : LIDAR (DSM-DTM médian) | OSM_H (tag height) | OSM_NIV (niveaux x 3 m) | DEFAUT",
-            "                      H_LIDAR, H_OSM, NIVEAUX : valeurs brutes pour contrôle ; ALT_SOL : altitude du sol (m)",
+            "                      H_LIDAR, H_OSM, NIVEAUX : valeurs brutes pour contrôle ;",
+            f"                      ALT_SOL : altitude du sol (m, {s['alt_ref']})",
             f"                      Répartition des sources : {s.get('hauteurs')}",
             "                      STATUT  : EXISTANT | DEMOLI (bâtiment existant à retirer dans l'état projeté)",
         ]
@@ -268,13 +280,38 @@ def _readme(opts, s, ex=None):
         "    zone_etude.shp     -> Limite de calcul (facultatif)",
         "",
         "SOURCES ET LICENCES",
-        "  Topographie : RNCan - MNEHR/HRDEM 1 m et MNEMR/MRDEM 30 m - Licence du gouvernement ouvert - Canada",
+        "  Topographie : MRNF - Lidar, modèles numériques (Forêt ouverte) - CC-BY 4.0 ;",
+        "                RNCan - MNEHR/HRDEM 1 m et MNEMR/MRDEM 30 m - Licence du gouvernement ouvert - Canada",
         "  Bâtiments   : © contributeurs OpenStreetMap - ODbL 1.0 ; hauteurs dérivées du HRDEM (RNCan)",
         "  Routes      : Adresses Québec / AQréseau+ - MRNF, gouvernement du Québec - CC-BY 4.0",
         "  Débits      : Débit de circulation - ministère des Transports et de la Mobilité durable - CC-BY 4.0",
         "  Les données sont fournies à titre indicatif : vérifier avant toute étude réglementaire.",
     ]
     return "\r\n".join(lines) + "\r\n"
+
+
+SOURCE_NAMES = {"FORET_OUVERTE": "LiDAR Forêt ouverte (MRNF)", "HRDEM": "LiDAR HRDEM (RNCan)",
+                "MRDEM": "MRDEM 30 m (RNCan)"}
+
+
+def _dem_sources(info):
+    parts = [f"{SOURCE_NAMES[k]} {v:.0%}" for k, v in info.parts.items() if v >= 0.0005]
+    return ", ".join(parts) or "aucune donnée"
+
+
+def _readme_dem(ex):
+    info = ex.dem_info if ex else None
+    if info is None:
+        return []
+    out = []
+    if info.feuillets:
+        out.append(f"                      Feuillets Forêt ouverte : {', '.join(info.feuillets)}"
+                   f" (acquisitions {', '.join(map(str, info.annees)) or 'inconnues'})")
+    if info.datum == "CGVD28":
+        if info.parts.get("HRDEM") or info.parts.get("MRDEM"):
+            out.append("                      Données RNCan (CGVD2013) ramenées en CGVD28 par l'écart médian mesuré : "
+                       + (f"{info.offset:+.2f} m" if info.offset is not None else "non mesurable, aucun décalage"))
+    return out
 
 
 def _readme_projets(ex):

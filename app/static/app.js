@@ -135,6 +135,7 @@ function requestBody() {
     crs: $("crs").value,
     dem_grid: $("dem-grid").checked,
     traffic: $("traffic").checked,
+    dem_source: $("dem-source").value,
   };
 }
 

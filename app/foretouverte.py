@@ -13,6 +13,7 @@ from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
+from shapely.geometry import box
 
 from . import net
 
@@ -166,6 +167,32 @@ def update(force: bool = False) -> dict:
         finally:
             _status["updating"] = False
         return etat()
+
+
+_tiles = {"key": None, "gdf": None}
+
+
+def tiles_for(bbox_ll) -> list[dict]:
+    """Feuillets dont l'emprise touche la boîte (lon/lat), du plus récent au plus ancien.
+
+    Télécharge l'index s'il n'est pas encore en cache ; liste vide si l'index est indisponible.
+    """
+    if not DALLES.exists():
+        update()
+        if not DALLES.exists():
+            return []
+    key = DALLES.stat().st_mtime
+    if _tiles["key"] != key:  # index rechargé après une mise à jour
+        _tiles["gdf"] = gpd.read_file(DALLES)
+        _tiles["key"] = key
+    g = _tiles["gdf"]
+    # Géométries simplifiées à ~30 m : boîte élargie d'autant pour ne manquer aucun feuillet en bordure.
+    x0, y0, x1, y1 = bbox_ll
+    hits = g.iloc[g.sindex.query(box(x0 - 0.0005, y0 - 0.0005, x1 + 0.0005, y1 + 0.0005))]
+    rows = [{"f": r.f, "mnt": r.mnt, "an": None if pd.isna(r.an) else int(r.an),
+             "ans": [int(a) for a in r.ans] if r.ans is not None else []}
+            for r in hits.itertuples()]
+    return sorted(rows, key=lambda r: -(r["an"] or 0))
 
 
 def update_in_background() -> None:

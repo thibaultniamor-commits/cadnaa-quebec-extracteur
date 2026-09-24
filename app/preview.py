@@ -38,7 +38,7 @@ def terrain(dtm, grid, zone, bbox_ll, epsg):
     x0, y0, x1, y1 = zone.bounds
     res = max(2.0, math.ceil(max(x1 - x0, y1 - y0) / MAX_CELLS))
     g = topo.Grid.covering(zone.buffer(2 * res).bounds, res, f"EPSG:{epsg}")
-    z, _ = topo.build_dtm(bbox_ll, g)
+    z, _ = topo.build_dtm(bbox_ll, g, source="hrdem")  # même référence (CGVD2013) que ALT_SOL sans topographie
     return z, g
 
 

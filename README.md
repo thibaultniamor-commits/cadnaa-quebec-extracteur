@@ -89,7 +89,7 @@ ou Lambert Québec (EPSG:32198). Encodage des attributs : CP1252 (fichier `.cpg`
 
 | Couche | Source | Accès |
 |---|---|---|
-| Topographie | RNCan **HRDEM 1 m** (LiDAR, DTM) ; complété par **MRDEM 30 m** hors couverture LiDAR | COG sur S3 + API STAC `datacube.services.geo.ca` |
+| Topographie | Par défaut **LiDAR Forêt ouverte** (MNT 1 m du MRNF, CGVD28), complété par le HRDEM puis le MRDEM ramenés en CGVD28 ; au choix **HRDEM 1 m** RNCan (CGVD2013) | GeoTIFF par feuillet `diffusion.mffp.gouv.qc.ca` ; COG sur S3 + API STAC `datacube.services.geo.ca` |
 | Bâtiments | Emprises **OpenStreetMap** (Overpass) | Hauteur = médiane (DSM − DTM) HRDEM, sinon tag `height`, sinon `building:levels` × 3 m, sinon valeur par défaut |
 | Routes | **AQréseau+** (Adresses Québec, MRNF) | ArcGIS REST `servicescarto.mrnf.gouv.qc.ca` |
 | Carte : dalles LiDAR | Index des feuillets 1/20 000 du **MNT LiDAR 1 m** (MRNF, Forêt ouverte) + année d'acquisition ; relief ombré LiDAR | `URL_Lidar.geojson` + `Metadonnees.zip` (`diffusion.mffp.gouv.qc.ca`), WMS `geoegl.msp.gouv.qc.ca/ws/mffpecofor.fcgi` |
@@ -127,6 +127,12 @@ la qualité géométrique du rattachement.
 - Les débits MTMD couvrent le réseau sous gestion du ministère (autoroutes, nationales et régionales hors milieu urbain, quelques artères). Les rues municipales n'ont pas de DJMA : à compléter avec les comptages des villes.
 - Les hauteurs LiDAR datent du relevé : un bâtiment construit après le relevé prend la hauteur OSM ou la valeur par défaut (voir `H_SRC`).
 - À la limite entre LiDAR 1 m et MRDEM 30 m, le terrain peut présenter une marche.
+- Référence altimétrique : **CGVD28** avec la source Forêt ouverte (celle des données du MRNF), **CGVD2013** avec
+  la source HRDEM. Les deux diffèrent d'environ 0,3 à 0,4 m dans le sud du Québec. En source Forêt ouverte, les
+  compléments RNCan et `ALT_SOL` (sol HRDEM) sont décalés de l'écart médian mesuré sur la zone ; sans couche
+  topographie, `ALT_SOL` reste en CGVD2013. `HAUTEUR` est relative et n'est pas concernée.
+- Le serveur du MRNF est plus lent et plus irrégulier que celui de RNCan (environ 15 à 80 s pour 4 km² à 1 m).
+  Les lectures sont gardées dans `cache/mnt/` (1 Go au maximum) : une zone réextraite est relue localement.
 - Surface maximale : 100 km². La résolution du MNT est automatique (1 m jusqu'à 4 km², 2 m jusqu'à 25 km², 5 m au-delà).
 - Le serveur du MRNF refuse les connexions TLS qui annoncent seulement `http/1.1` en ALPN (cas de `requests`). Ce service est donc interrogé via `urllib` (`app/net.py`).
 
@@ -136,7 +142,7 @@ la qualité géométrique du rattachement.
 app/
   main.py       API FastAPI + tâches de fond
   pipeline.py   Orchestration, écriture des shapefiles, LISEZMOI
-  topo.py       MNT (HRDEM/MRDEM) et courbes de niveau
+  topo.py       MNT (Forêt ouverte/HRDEM/MRDEM), recalage altimétrique et courbes de niveau
   foretouverte.py  Index des dalles LiDAR MRNF (cache + mise à jour)
   buildings.py  Bâtiments OSM + hauteurs LiDAR
   roads.py      Routes AQréseau+

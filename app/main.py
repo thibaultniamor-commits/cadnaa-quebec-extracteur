@@ -51,6 +51,7 @@ class ExtractRequest(BaseModel):
     crs: str = "auto"
     dem_grid: bool = False
     traffic: bool = True
+    dem_source: Literal["foretouverte", "hrdem"] = "foretouverte"
 
 
 @app.get("/")

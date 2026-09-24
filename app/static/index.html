@@ -36,8 +36,14 @@
 
     <section>
       <h2><span class="step">2</span> Couches</h2>
-      <label class="check" data-tip="Courbes de niveau 3D (PolylineZ) calculées sur le MNT LiDAR HRDEM 1 m de RNCan, complété par le MRDEM 30 m hors couverture LiDAR. Altitudes CGVD2013."><input type="checkbox" name="layer" value="topo" checked> Topographie (courbes de niveau)</label>
+      <label class="check" data-tip="Courbes de niveau 3D (PolylineZ) calculées sur le MNT LiDAR 1 m (Forêt ouverte du MRNF ou HRDEM de RNCan, au choix), complété par le MRDEM 30 m hors couverture LiDAR."><input type="checkbox" name="layer" value="topo" checked> Topographie (courbes de niveau)</label>
       <div class="sub-opts">
+        <label data-tip="Forêt ouverte : LiDAR du MRNF (feuillets affichés sur la carte, le plus récent l'emporte), altitudes CGVD28 ; les trous sont comblés par le HRDEM ramené en CGVD28. HRDEM : mosaïque LiDAR de RNCan, altitudes CGVD2013, serveur plus rapide.">Source MNT
+          <select id="dem-source">
+            <option value="foretouverte" selected>Forêt ouverte (CGVD28)</option>
+            <option value="hrdem">HRDEM RNCan (CGVD2013)</option>
+          </select>
+        </label>
         <label data-tip="Écart d'altitude entre deux courbes. 0,5 à 1 m en milieu plat ou urbain ; 2 à 5 m en relief marqué, pour limiter le volume du modèle CadnaA.">Équidistance
           <select id="interval">
             <option value="0.5">0,5 m</option>
@@ -125,7 +131,7 @@
     </section>
 
     <footer>
-      Sources : RNCan (HRDEM/MRDEM), © OpenStreetMap (ODbL), Adresses Québec – MRNF (CC-BY 4.0)
+      Sources : MRNF (LiDAR Forêt ouverte), RNCan (HRDEM/MRDEM), © OpenStreetMap (ODbL), Adresses Québec – MRNF (CC-BY 4.0)
     </footer>
   </aside>
 
@@ -297,8 +303,17 @@
         <section id="h-couches">
           <h3>2. Couches et options</h3>
           <h4>Topographie</h4>
-          <p>Courbes de niveau 3D calculées sur le MNT LiDAR <b>HRDEM 1 m</b> (RNCan), complété par le
-            <b>MRDEM 30 m</b> là où il n'y a pas de LiDAR. La couverture LiDAR s'affiche dans le journal d'extraction.</p>
+          <p>Courbes de niveau 3D calculées sur un MNT LiDAR 1 m. Deux sources au choix (option <b>Source MNT</b>) :</p>
+          <ul>
+            <li><b>Forêt ouverte</b> (par défaut) : LiDAR du MRNF, par feuillet 1/20 000 (ceux affichés sur la carte).
+              Là où plusieurs feuillets se chevauchent, le plus récent l'emporte. Altitudes <b>CGVD28</b>.
+              Les trous éventuels sont comblés par le HRDEM puis le MRDEM, décalés de l'écart médian mesuré sur la
+              zone commune (environ +0,3 m dans le sud du Québec) : pas de marche aux raccords.</li>
+            <li><b>HRDEM</b> : mosaïque LiDAR de RNCan, altitudes <b>CGVD2013</b>. Serveur plus rapide ; LiDAR parfois plus ancien.</li>
+          </ul>
+          <p>Le journal d'extraction et le <code>LISEZMOI.txt</code> indiquent les sources utilisées, les feuillets,
+            les années d'acquisition et la référence altimétrique. Le serveur du MRNF est plus lent : une zone déjà
+            extraite est relue depuis le cache local.</p>
           <table>
             <tr><th>Option</th><th>Effet</th><th>Conseil</th></tr>
             <tr><td>Équidistance</td><td>Écart d'altitude entre deux courbes</td>
@@ -471,7 +486,8 @@
         <section id="h-sources">
           <h3>Sources et licences</h3>
           <ul>
-            <li>Topographie : RNCan, HRDEM 1 m et MRDEM 30 m – Licence du gouvernement ouvert – Canada</li>
+            <li>Topographie : MRNF, Lidar – modèles numériques (Forêt ouverte) – CC-BY 4.0 ;
+              RNCan, HRDEM 1 m et MRDEM 30 m – Licence du gouvernement ouvert – Canada</li>
             <li>Dalles et relief ombré LiDAR : MRNF, Forêt ouverte – CC-BY 4.0</li>
             <li>Bâtiments : © contributeurs OpenStreetMap – ODbL 1.0</li>
             <li>Routes : Adresses Québec, AQréseau+ – MRNF – CC-BY 4.0</li>
