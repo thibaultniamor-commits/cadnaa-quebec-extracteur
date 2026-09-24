@@ -102,6 +102,7 @@ footer a { color: var(--accent); }
 #viewer-pick dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 8px 0 0; }
 #viewer-pick dt { color: var(--muted); }
 #viewer-pick dd { margin: 0; font-variant-numeric: tabular-nums; }
+#viewer-pick a { color: var(--accent); }
 .hidden { display: none !important; }
 
 .title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
@@ -287,3 +288,5 @@ button.danger { color: var(--err); border-color: var(--err); }
 .lidar-row input { width: 150px; }
 .lidar-ctl button { margin-top: 2px; }
 .lidar-pop { font-size: 12.5px; line-height: 1.5; }
+.prov-more { margin: 8px 0; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; }
+.prov-more summary { cursor: pointer; }

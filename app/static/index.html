@@ -362,6 +362,44 @@
               <a href="https://www.donneesquebec.ca/recherche/dataset/referentiel_bati" target="_blank" rel="noopener">Fiche Données Québec</a> ·
               <a href="https://diffusion.mern.gouv.qc.ca/diffusion/RGQ/Vectoriel/Theme/Local/ReferentielBati/Document/ListeAttributs_RefBati.pdf" target="_blank" rel="noopener">Liste des attributs (PDF)</a></li>
           </ul>
+          <details class="prov-more">
+            <summary><b>D'où viennent les bâtiments OpenStreetMap ?</b></summary>
+            <p>OpenStreetMap est une carte collaborative mondiale, sur le modèle de Wikipédia : n'importe qui peut
+              ajouter ou corriger un bâtiment. Il n'y a ni producteur unique ni validation officielle, mais chaque
+              objet garde son historique complet (qui l'a modifié, quand, et parfois avec quelle source). Un bâtiment
+              y entre de trois façons :</p>
+            <ol>
+              <li><b>Tracé sur une photo aérienne</b> par un contributeur, sur une imagerie autorisée (Bing, Esri…).
+                C'est le cas le plus courant ;</li>
+              <li><b>Import de données ouvertes</b> (RNCan CanVec, données municipales), encadré par des règles de la
+                communauté ;</li>
+              <li><b>Connaissance du terrain</b> : un contributeur local ajoute le nom, le nombre d'étages ou la hauteur.</li>
+            </ol>
+            <p>Relevé fait sur quelques secteurs en septembre 2026 :</p>
+            <table>
+              <tr><th>Secteur</th><th>Bâtiments</th><th>Contributeurs</th><th>Dernières modifications</th><th>Avec hauteur ou étages</th></tr>
+              <tr><td>Québec, haute-ville</td><td>2 299</td><td>89</td><td>surtout 2025</td><td>57 %</td></tr>
+              <tr><td>Montréal, centre</td><td>768</td><td>73</td><td>2023 à 2025</td><td>17 %</td></tr>
+              <tr><td>Lévis</td><td>714</td><td>22</td><td>surtout 2024</td><td>0 %</td></tr>
+              <tr><td>Beauce, rural</td><td>1 118</td><td>21</td><td>modifications rares</td><td>1 %</td></tr>
+            </table>
+            <ul>
+              <li>En ville, OSM est très actif : les constructions récentes y apparaissent souvent avant les données
+                officielles. En milieu rural, il est souvent incomplet. La règle de priorité en tient compte.</li>
+              <li>La méthode de tracé est rarement documentée : plus de 90 % des bâtiments n'ont pas de tag
+                <code>source</code>. Le Référentiel, lui, donne pour chaque emprise son producteur, sa méthode, sa date
+                et son niveau de validation.</li>
+              <li>Les hauteurs OSM sont rares hors de certains quartiers : elles ne servent que de repli après la
+                mesure LiDAR.</li>
+              <li>Les données sont lues au moment de l'extraction sur l'API publique Overpass : elles sont à jour
+                au jour près.</li>
+            </ul>
+            <p><b>Vérifier un bâtiment précis</b> : dans l'aperçu 3D, cliquer le bâtiment puis le lien
+              <b>historique</b> de sa fiche. On peut aussi ouvrir
+              <code>openstreetmap.org/way/&lt;numéro&gt;/history</code> avec le numéro du champ <code>OSM_ID</code>
+              (<code>w123</code> correspond au chemin 123). La page liste chaque version du tracé, son auteur, sa date
+              et le commentaire de modification.</p>
+          </details>
           <p><b>Règle de priorité</b> (option <b>Emprises : Automatique</b>). La zone est découpée en mailles de
             500 m. Dans chaque maille, l'outil mesure la part de la surface bâtie du Référentiel que recouvrent les
             emprises OSM :</p>

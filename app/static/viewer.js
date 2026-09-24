@@ -24,6 +24,9 @@ const EMP = {
 const empKey = (b) => (b.e === "PROJET" || !b.e ? "PROJET" : `${b.e}/${b.er}`);
 const EMP_NAMES = { OSM: "OpenStreetMap", REFBATI: "Référentiel québécois sur les bâtiments", PROJET: "Saisie sur plan" };
 const DEMOLI_COLOR = "#e02424";
+const OSM_TYPES = { w: "way", r: "relation", n: "node" };
+// Historique d'un objet OSM (w123 -> chemin 123) : auteurs, dates et sources de chaque modification.
+const osmHistory = (id) => (OSM_TYPES[id[0]] ? `https://www.openstreetmap.org/${OSM_TYPES[id[0]]}/${id.slice(1)}/history` : null);
 const HEIGHT_STOPS = [[0, "#3b6fb6"], [10, "#4fb0a5"], [20, "#9ccf5a"], [35, "#f2c14e"], [60, "#e0603a"]];
 const ROAD_COLORS = {
   Autoroute: "#c0392b", Nationale: "#e67e22", "Régionale": "#e6a822", Collectrice: "#d4b000",
@@ -276,6 +279,8 @@ function select(state, k) {
       <dt>Emprise</dt><dd>${escapeHtml(EMP_NAMES[b.e] || b.e || "—")}${b.er ? ` (${b.er === "PRINCIPAL" ? "source principale" : "complément"})` : ""}</dd>
       ${b.e === "REFBATI" ? `<dt>Producteur</dt><dd>${escapeHtml(b.ep)}</dd>
       <dt>Date source</dt><dd>${escapeHtml(b.ed || "inconnue")}</dd>` : ""}
+      ${b.oi && osmHistory(b.oi) ? `<dt>OSM</dt><dd><a href="${osmHistory(b.oi)}" target="_blank" rel="noopener"
+        title="Qui a tracé ce bâtiment, quand, et avec quelle source">${escapeHtml(b.oi)} · historique</a></dd>` : ""}
     </dl>`;
   box.classList.remove("hidden");
 }

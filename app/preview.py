@@ -109,6 +109,7 @@ def building_items(buildings, f):
                 "h": _num(row.HAUTEUR), "s": row.H_SRC, "hl": _num(row.H_LIDAR), "ho": _num(row.H_OSM),
                 "nv": _num(row.NIVEAUX, 0), "n": row.NOM or "", "ty": row.TYPE or "",
                 "e": row.EMP_SRC, "er": row.EMP_ROLE or "", "ep": row.EMP_PROD or "", "ed": row.EMP_DATE or "",
+                "oi": row.OSM_ID or "",
             }
             if getattr(row, "ID_BAT", ""):
                 item["bid"] = row.ID_BAT
