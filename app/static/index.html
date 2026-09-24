@@ -104,6 +104,26 @@
       </div>
     </section>
 
+    <section id="proj-section" class="hidden">
+      <h2><span class="step">5</span> Bâtiments projetés <span class="opt">facultatif</span></h2>
+      <p class="hint">Importer un plan d'architecte, le caler sur la carte par 3 ou 4 points, puis tracer les emprises
+        projetées et désigner les bâtiments démolis.</p>
+      <div class="row">
+        <label class="file-btn" data-tip="Plan de masse ou d'implantation. PDF : la page est affichée en image. DXF : les lignes du dessin sont lues (calques, accrochage aux sommets, prise directe des polylignes fermées). DWG : exporter d'abord en DXF.">
+          <input type="file" id="plan-file" accept=".pdf,.dxf" hidden>Importer un plan (PDF, DXF)</label>
+        <button id="plan-reopen" type="button" class="ghost" data-tip="Éditeur de calage et de saisie. Sans plan, on peut aussi tracer les emprises directement sur l'imagerie.">Ouvrir l'éditeur</button>
+      </div>
+      <div id="proj-info" class="info muted">Aucun bâtiment projeté.</div>
+      <div class="sub-opts flush">
+        <label data-tip="Fichier séparé : batiments_projetes.shp, pratique pour une variante CadnaA. Dans batiments.shp : un seul fichier, le champ STATUT (EXISTANT, DEMOLI, PROJETE) distingue les états. Dans les deux cas, les bâtiments démolis restent dans batiments.shp avec STATUT = DEMOLI.">Sortie dans le ZIP
+          <select id="proj-mode">
+            <option value="separe" selected>Fichier séparé</option>
+            <option value="fusion">Dans batiments.shp</option>
+          </select>
+        </label>
+      </div>
+    </section>
+
     <footer>
       Sources : RNCan (HRDEM/MRDEM), © OpenStreetMap (ODbL), Adresses Québec – MRNF (CC-BY 4.0)
     </footer>
@@ -123,6 +143,7 @@
       <h3>Couches</h3>
       <label class="check small" data-tip="MNT allégé pour l'affichage (300 × 300 mailles au plus). Les courbes du ZIP utilisent la pleine résolution."><input type="checkbox" id="v-terrain" checked> Terrain (MNT)</label>
       <label class="check small" data-tip="Emprises extrudées à leur valeur HAUTEUR. Cliquer un bâtiment pour voir ses attributs."><input type="checkbox" id="v-buildings" checked> Bâtiments</label>
+      <label id="v-demolis-row" class="check small hidden" data-tip="Bâtiments existants marqués démolis, en rouge transparent. Ils restent dans batiments.shp avec STATUT = DEMOLI."><input type="checkbox" id="v-demolis" checked> Bâtiments démolis</label>
       <label class="check small" data-tip="Tronçons AQréseau+ drapés sur le terrain."><input type="checkbox" id="v-roads" checked> Routes</label>
       <label class="check small" data-tip="Courbes à leur altitude réelle. Sur les grandes zones, une partie seulement est affichée (indiqué dans la barre du haut)."><input type="checkbox" id="v-contours"> Courbes de niveau</label>
       <label class="check small" data-tip="Contour de la zone d'étude dessinée."><input type="checkbox" id="v-zone" checked> Limite de zone</label>
@@ -146,6 +167,76 @@
     <div id="viewer-pick" class="hidden"></div>
   </div>
 
+  <div id="calage" class="hidden" role="dialog" aria-label="Bâtiments projetés : calage du plan et saisie">
+    <div id="cal-bar">
+      <span id="cal-title"></span>
+      <span class="bar-actions">
+        <button id="cal-toggle-plan" type="button" class="ghost" data-tip="Donne toute la largeur à la carte une fois le plan calé.">Masquer le plan source</button>
+        <button id="cal-help" type="button" class="ghost" data-tip="Notice : calage et saisie des bâtiments projetés.">Notice</button>
+        <button id="cal-close" type="button" class="primary-inline" data-tip="Enregistre les saisies et revient à la carte. Elles apparaissent dans l'aperçu 3D et dans le ZIP.">Terminer</button>
+      </span>
+    </div>
+    <div id="cal-body">
+      <div id="cal-plan-wrap" class="cal-pane">
+        <div id="cal-plan"></div>
+        <span class="cal-tag">Plan</span>
+        <p id="cal-empty">Aucun plan importé.<br>
+          <label class="file-btn" for="plan-file">Importer un plan (PDF, DXF)</label></p>
+      </div>
+      <div id="cal-map-wrap" class="cal-pane">
+        <div id="cal-map"></div>
+        <span class="cal-tag">Carte</span>
+      </div>
+      <div id="cal-msg" class="hidden"></div>
+      <div id="cal-side">
+        <h3>Plan</h3>
+        <label id="cal-page-row" class="field hidden">Page <select id="cal-page"></select></label>
+        <div class="row">
+          <button id="cal-crop" type="button" data-tip="Tracer sur le plan un rectangle autour de la partie utile : cartouche, légende et marges ne sont plus affichés sur la carte. Les coins restent déplaçables.">Rogner</button>
+          <button id="cal-uncrop" type="button" class="ghost" data-tip="Supprime le rognage.">Plan entier</button>
+        </div>
+        <details id="cal-layers-box" class="hidden">
+          <summary data-tip="Masquer les calques inutiles (cotes, mobilier, hachures) : ils ne sont plus affichés ni utilisés pour l'accrochage.">Calques DXF</summary>
+          <div id="cal-layers"></div>
+        </details>
+
+        <h3>Points de calage</h3>
+        <button id="cal-add" type="button" class="wide" data-tip="Cliquer un point sur le plan, puis le même point sur la carte. Choisir des coins de bâtiments existants, bien répartis autour du projet. Les points restent déplaçables.">Ajouter un point</button>
+        <table id="cal-pairs"></table>
+        <label class="field" data-tip="Similitude : échelle, rotation et translation, sans déformation ; adaptée aux plans d'architecte. Affine : corrige aussi une déformation (scan, impression) ; 3 points minimum, 4 pour un contrôle. Échelle du DXF : seules la rotation et la position sont calées.">Transformation
+          <select id="cal-method">
+            <option value="similitude" selected>Similitude, 2 pts min.</option>
+            <option value="affine">Affine, 3 pts min.</option>
+            <option value="rigide">Échelle DXF, 2 pts min.</option>
+          </select>
+        </label>
+        <div id="cal-stats" class="info"></div>
+
+        <h3>Plan sur la carte</h3>
+        <label class="check small"><input type="checkbox" id="cal-show" checked> Afficher le plan</label>
+        <label class="field" data-tip="Transparence du plan sur la carte, pour vérifier le calage sur l'imagerie et les emprises existantes.">Opacité <span id="cal-opacity-val">70 %</span></label>
+        <input type="range" id="cal-opacity" min="0" max="100" step="5" value="70">
+        <label class="check small" data-tip="Le blanc du plan devient transparent (mode produit) : seuls les traits se superposent à l'imagerie."><input type="checkbox" id="cal-multiply" checked> Fond blanc transparent</label>
+
+        <h3>Bâtiments projetés</h3>
+        <div class="row wrap">
+          <button id="cal-draw" type="button" data-tip="Cliquer les sommets de l'emprise sur la carte. Accrochage aux sommets du DXF, des bâtiments existants et des autres projets.">Tracer</button>
+          <button id="cal-take" type="button" class="hidden" data-tip="Cliquer à l'intérieur d'une polyligne fermée du DXF : elle devient une emprise projetée.">Prendre sur le DXF</button>
+          <button id="cal-demol" type="button" data-tip="Cliquer un bâtiment existant (jaune) pour le marquer démoli (rouge), ou l'annuler.">Démolir</button>
+        </div>
+        <button id="cal-covered" type="button" class="ghost wide" disabled data-tip="Marque démolis les bâtiments existants recouverts à plus de 30 % par une emprise projetée.">Démolir les bâtiments recouverts (0)</button>
+        <div id="cal-edit" class="hidden">
+          <label class="field">Nom <input id="pb-nom" type="text" maxlength="100"></label>
+          <label class="field" data-tip="Facultatif. Renseigner les niveaux calcule la hauteur (niveaux × 3 m), modifiable ensuite.">Niveaux <input id="pb-niv" type="number" min="1" max="150" step="1"></label>
+          <label class="field" data-tip="Hauteur du bâtiment au-dessus du sol (m), comme HAUTEUR des bâtiments existants.">Hauteur (m) <input id="pb-h" type="number" min="0.5" max="300" step="0.5"></label>
+          <p class="hint">Sommets déplaçables sur la carte ; clic droit sur un sommet pour le supprimer.</p>
+          <button id="pb-del" type="button" class="ghost danger">Supprimer ce bâtiment</button>
+        </div>
+        <ul id="cal-list"></ul>
+      </div>
+    </div>
+  </div>
+
   <dialog id="help" aria-labelledby="help-title">
     <div class="help-head">
       <h2 id="help-title">Notice d'utilisation</h2>
@@ -159,6 +250,7 @@
         <a href="#h-projection">3. Projection</a>
         <a href="#h-extraction">4. Extraction</a>
         <a href="#h-apercu">5. Aperçu 3D</a>
+        <a href="#h-projets">Bâtiments projetés</a>
         <a href="#h-zip">6. ZIP</a>
         <a href="#h-cadnaa">7. Import CadnaA</a>
         <a href="#h-limites">Limites</a>
@@ -262,6 +354,58 @@
           <p>Le terrain affiché est allégé (300 × 300 mailles au plus) ; les shapefiles gardent la pleine résolution.</p>
         </section>
 
+        <section id="h-projets">
+          <h3>Bâtiments projetés (plan importé)</h3>
+          <p>Après l'extraction, la section <b>5</b> permet d'ajouter les bâtiments d'un projet à partir d'un plan
+            d'architecte, et de marquer les bâtiments existants qui seront démolis.</p>
+          <h4>1. Importer le plan</h4>
+          <ul>
+            <li><b>PDF</b> : la page est affichée en image (choisir la page s'il y en a plusieurs).</li>
+            <li><b>DXF</b> : les lignes du dessin sont lues. On peut masquer des calques, accrocher les points aux
+              sommets du dessin et prendre directement une polyligne fermée comme emprise. Un <b>DWG</b> doit
+              d'abord être exporté en DXF.</li>
+            <li><b>Rogner</b> : tracer un rectangle autour de la partie utile du plan (sans cartouche ni légende).</li>
+          </ul>
+          <h4>2. Caler le plan</h4>
+          <ol>
+            <li><b>Ajouter un point</b>, cliquer un point bien identifiable sur le plan (à gauche),</li>
+            <li>puis le même point sur la carte (à droite). Le clic s'accroche aux coins des bâtiments existants (jaune).</li>
+            <li>Recommencer : <b>3 ou 4 points</b> bien répartis autour du projet. Les points restent déplaçables.</li>
+          </ol>
+          <table>
+            <tr><th>Transformation</th><th>Usage</th><th>Points</th></tr>
+            <tr><td>Similitude</td><td>Plan d'architecte : échelle, rotation, position, sans déformation</td><td>2 min., 3 ou 4 pour un contrôle</td></tr>
+            <tr><td>Affine</td><td>Plan scanné ou imprimé, légèrement déformé</td><td>3 min., 4 pour un contrôle</td></tr>
+            <tr><td>Échelle du DXF</td><td>DXF dont les unités sont connues : seules la rotation et la position sont calées</td><td>2 min.</td></tr>
+          </table>
+          <p>L'<b>écart</b> de chaque point est la distance au sol entre le point cliqué sur la carte et sa position
+            calculée à partir du plan. Un écart moyen (RMS) inférieur à 0,5 m est bon ; un point très au-dessus des
+            autres est probablement mal cliqué. Avec le nombre minimum de points, les écarts sont nuls et ne prouvent
+            rien : ajouter un point de contrôle. L'échelle déduite (1:500…) permet aussi de vérifier le calage.</p>
+          <p>Attention : les emprises OpenStreetMap peuvent être décalées de quelques décimètres. Vérifier le calage
+            sur l'imagerie avec le curseur d'<b>opacité</b> ; <b>Fond blanc transparent</b> ne garde que les traits du plan.</p>
+          <h4>3. Saisir les bâtiments projetés</h4>
+          <ul>
+            <li><b>Tracer</b> : cliquer les sommets ; double-clic ou clic sur le premier sommet pour fermer ;
+              Retour arrière annule le dernier sommet ; Échap abandonne.</li>
+            <li><b>Prendre sur le DXF</b> : cliquer à l'intérieur d'une polyligne fermée du plan.</li>
+            <li>Pour chaque bâtiment : nom, niveaux (hauteur = niveaux × 3 m) ou hauteur directe. L'altitude du sol
+              est prise sur le MNT (médiane sous l'emprise).</li>
+            <li><b>Démolir</b> : cliquer un bâtiment existant pour le marquer démoli (rouge). <b>Démolir les bâtiments
+              recouverts</b> marque tous ceux recouverts à plus de 30 % par une emprise projetée.</li>
+          </ul>
+          <h4>4. Sortie</h4>
+          <p>Les bâtiments projetés apparaissent en violet dans l'aperçu 3D, les démolis en rouge transparent.
+            Dans le ZIP, selon l'option <b>Sortie dans le ZIP</b> :</p>
+          <ul>
+            <li><b>Fichier séparé</b> : <code>batiments_projetes.shp</code>, à placer dans une variante CadnaA ;</li>
+            <li><b>Dans batiments.shp</b> : un seul fichier, le champ <code>STATUT</code> distingue les états.</li>
+          </ul>
+          <p>Dans les deux cas, <code>batiments.shp</code> porte <code>STATUT</code> = <code>EXISTANT</code> ou
+            <code>DEMOLI</code>. État actuel : EXISTANT + DEMOLI ; état projeté : EXISTANT + PROJETE.</p>
+          <p>Les saisies sont conservées si l'extraction est relancée (nouvelle zone ou options).</p>
+        </section>
+
         <section id="h-zip">
           <h3>6. Contenu du ZIP</h3>
           <p><b>Générer le ZIP</b> (sous l'aperçu ou dans la barre de la vue 3D) écrit les fichiers suivants :</p>
@@ -270,10 +414,13 @@
             <tr><td><code>courbes_niveau.shp</code></td><td>Courbes 3D (Z = altitude), champ <code>ALTITUDE</code></td></tr>
             <tr><td><code>batiments.shp</code></td><td><code>HAUTEUR</code> (m, relative au sol), <code>H_SRC</code>,
               <code>H_LIDAR</code>, <code>H_OSM</code>, <code>NIVEAUX</code>, <code>ALT_SOL</code>, <code>TYPE</code>,
-              <code>NOM</code></td></tr>
+              <code>NOM</code>, <code>STATUT</code></td></tr>
             <tr><td><code>routes.shp</code></td><td><code>NOM</code>, <code>CLASSE</code>, <code>VIT_DEF</code>, et avec
               les débits : <code>DJMA</code>, <code>DJME</code>, <code>DJMH</code>, <code>PCT_CAM</code>, <code>H30</code>,
               <code>NB_CHAUS</code>, <code>DJMA_CH</code>, <code>RECOUVR</code>…</td></tr>
+            <tr><td><code>batiments_projetes.shp</code></td><td>Bâtiments projetés (si saisis, sortie en fichier
+              séparé) : <code>HAUTEUR</code>, <code>NIVEAUX</code>, <code>ALT_SOL</code>, <code>STATUT</code> = PROJETE,
+              <code>PLAN</code></td></tr>
             <tr><td><code>sections_trafic_mtmd.shp</code></td><td>Sections MTMD brutes, pour contrôler le rattachement</td></tr>
             <tr><td><code>zone_etude.shp</code></td><td>Contour de la zone</td></tr>
             <tr><td><code>mnt.asc</code></td><td>MNT en grille (si l'option est cochée)</td></tr>
@@ -292,6 +439,7 @@
             <tr><th>Fichier</th><th>Type d'objet CadnaA</th><th>Attributs</th></tr>
             <tr><td><code>courbes_niveau.shp</code></td><td>Courbe de niveau</td><td>Hauteur = coordonnée Z (ou <code>ALTITUDE</code>)</td></tr>
             <tr><td><code>batiments.shp</code></td><td>Bâtiment</td><td>Hauteur = <code>HAUTEUR</code> (relative)</td></tr>
+            <tr><td><code>batiments_projetes.shp</code></td><td>Bâtiment (variante projet)</td><td>Hauteur = <code>HAUTEUR</code> (relative)</td></tr>
             <tr><td><code>routes.shp</code></td><td>Route</td><td>Nom = <code>NOM</code> ; vitesse = <code>VIT_DEF</code> ;
               DJMA = <code>DJMA_CH</code> ; % PL = <code>PCT_CAM</code></td></tr>
             <tr><td><code>zone_etude.shp</code></td><td>Limite de calcul (facultatif)</td><td>–</td></tr>
@@ -334,5 +482,6 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.js"></script>
   <script src="/static/app.js"></script>
+  <script src="/static/plan.js"></script>
 </body>
 </html>

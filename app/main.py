@@ -5,12 +5,15 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from typing import Literal
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import crs, pipeline
+from . import calage, crs, pipeline, plans
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT = ROOT.parent / "output"
@@ -23,6 +26,9 @@ _executor = ThreadPoolExecutor(max_workers=2)
 _jobs: dict[str, dict] = {}
 _lock = threading.Lock()
 KEEP_EXTRACTIONS = 5  # extractions gardées en mémoire pour générer leur ZIP
+_plans: dict[str, dict] = {}
+KEEP_PLANS = 5
+MAX_PLAN_MB = 150
 
 
 class ExtractRequest(BaseModel):
@@ -122,3 +128,106 @@ def preview_data(job_id: str):
     if not job["preview"].exists():
         raise HTTPException(404, "Aperçu indisponible.")
     return FileResponse(job["preview"], media_type="application/json")
+
+
+@app.get("/api/jobs/{job_id}/batiments")
+def existing_buildings(job_id: str):
+    """Emprises existantes en WGS84 : accrochage des points de calage et désignation des démolitions."""
+    ex = _extraction(job_id)
+    if ex.buildings is None:
+        return {"type": "FeatureCollection", "features": []}
+    b = ex.buildings[["OSM_ID", "HAUTEUR", "geometry"]].to_crs(4326)
+    return JSONResponse(content=b.__geo_interface__)
+
+
+def _extraction(job_id):
+    ex = _done(job_id)["extraction"]
+    if ex is None:
+        raise HTTPException(410, "Extraction expirée : relancez l'extraction.")
+    return ex
+
+
+# ---------- Plans et bâtiments projetés ----------
+
+@app.post("/api/plans")
+async def upload_plan(request: Request, name: str = "plan"):
+    data = await request.body()
+    if not data:
+        raise HTTPException(400, "Fichier vide.")
+    if len(data) > MAX_PLAN_MB * 1e6:
+        raise HTTPException(413, f"Fichier trop lourd (maximum {MAX_PLAN_MB} Mo).")
+    try:
+        kind = plans.kind_of(data, name)
+        if kind == "dxf":
+            return JSONResponse(await run_in_threadpool(plans.dxf_read, data))
+        pages = await run_in_threadpool(plans.pdf_pages, data)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    plan_id = uuid.uuid4().hex[:12]
+    with _lock:
+        _plans[plan_id] = {"data": data, "pages": pages, "png": {}}
+        for old in list(_plans)[:-KEEP_PLANS]:
+            del _plans[old]
+    return {"kind": "pdf", "plan_id": plan_id, "pages": pages}
+
+
+@app.get("/api/plans/{plan_id}/page/{page}")
+def plan_page(plan_id: str, page: int):
+    plan = _plans.get(plan_id)
+    if plan is None:
+        raise HTTPException(404, "Plan expiré : réimporter le fichier.")
+    if not 0 <= page < len(plan["pages"]):
+        raise HTTPException(404, "Page inexistante.")
+    if page not in plan["png"]:
+        plan["png"] = {page: plans.pdf_render(plan["data"], page, plan["pages"][page]["dpi"])}
+    return Response(plan["png"][page], media_type="image/png", headers={"Cache-Control": "max-age=3600"})
+
+
+class FitRequest(BaseModel):
+    pairs: list[tuple[float, float, float, float]] = Field(max_length=50)  # x, y plan ; lat, lon carte
+    method: Literal["similitude", "affine", "rigide"] = "similitude"
+    bbox: tuple[float, float, float, float]
+    unit_m: float | None = Field(None, gt=0)
+
+
+@app.post("/api/calage")
+def fit_plan(req: FitRequest):
+    try:
+        return calage.fit(req.pairs, req.method, req.bbox, req.unit_m)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+class ProjectBuilding(BaseModel):
+    id: str = Field(max_length=40)
+    nom: str = Field(max_length=100)
+    hauteur: float = Field(gt=0, le=300)
+    niveaux: int | None = Field(None, ge=1, le=150)
+    plan: str | None = Field(None, max_length=200)
+    geometry: dict
+
+
+class ProjectsRequest(BaseModel):
+    mode: Literal["separe", "fusion"] = "separe"
+    buildings: list[ProjectBuilding] = Field(default_factory=list)
+    demolis: list[str] = Field(default_factory=list)
+
+
+@app.put("/api/jobs/{job_id}/projets")
+def set_projects(job_id: str, req: ProjectsRequest):
+    job = _done(job_id)
+    ex = _extraction(job_id)
+    with job["lock"]:
+        try:
+            info = pipeline.set_projets(ex, [b.model_dump() for b in req.buildings], req.demolis, req.mode)
+        except (ValueError, KeyError, TypeError, AttributeError) as e:
+            raise HTTPException(400, f"Bâtiment projeté invalide : {e}") from e
+        job["file"] = None  # le ZIP devra être régénéré
+    return info
+
+
+@app.get("/api/jobs/{job_id}/projets")
+def projects_preview(job_id: str):
+    """Volumes des bâtiments projetés et OSM_ID démolis, dans le repère de l'aperçu 3D."""
+    ex = _extraction(job_id)
+    return {"buildings": ex.projets_items, "demolis": sorted(ex.demolis)}

@@ -159,6 +159,7 @@ $("go").onclick = async () => {
   job = null;
   $("log").innerHTML = "";
   $("results").classList.add("hidden");
+  $("proj-section").classList.add("hidden");
   $("go").disabled = true;
   $("go").textContent = "Extraction en cours…";
   try {
@@ -172,6 +173,7 @@ $("go").onclick = async () => {
       $("make-zip").textContent = "Générer le ZIP";
       $("results").classList.remove("hidden");
       checkStale();
+      window.onExtraction();
       window.openViewer(job.id);
     }
   } catch (err) {
@@ -199,11 +201,18 @@ async function poll(jobId) {
 
 $("open-3d").onclick = () => { if (job) window.openViewer(job.id); };
 
+// Bâtiments projetés modifiés : le ZIP déjà écrit n'est plus à jour.
+function resetZip() {
+  if (job) job.zip = null;
+  [$("make-zip"), $("viewer-zip")].forEach((b) => { b.textContent = "Générer le ZIP"; });
+}
+
 async function makeZip() {
   if (!job) return;
   const buttons = [$("make-zip"), $("viewer-zip")];
   buttons.forEach((b) => { b.disabled = true; b.textContent = "Écriture du ZIP…"; });
   try {
+    await window.flushProjects();
     if (!job.zip) {
       const r = await fetch(`/api/jobs/${job.id}/zip`, { method: "POST" });
       const d = await r.json();

@@ -11,7 +11,9 @@ const SRC = {
   OSM_H: { color: "#f08c2e", label: "OSM : hauteur" },
   OSM_NIV: { color: "#e8c547", label: "OSM : niveaux × 3 m" },
   DEFAUT: { color: "#d63b3b", label: "Valeur par défaut" },
+  PROJET: { color: "#7c3aed", label: "Bâtiment projeté" },
 };
+const DEMOLI_COLOR = "#e02424";
 const HEIGHT_STOPS = [[0, "#3b6fb6"], [10, "#4fb0a5"], [20, "#9ccf5a"], [35, "#f2c14e"], [60, "#e0603a"]];
 const ROAD_COLORS = {
   Autoroute: "#c0392b", Nationale: "#e67e22", "Régionale": "#e6a822", Collectrice: "#d4b000",
@@ -108,14 +110,15 @@ function buildBuildings(items, zref) {
 // Exagération du relief seulement : la base suit le terrain exagéré, la hauteur reste réelle.
 function exaggerate(state, k) {
   [state.terrain, state.roads, state.contours, state.zone].forEach((o) => { if (o) o.scale.y = k; });
-  const mesh = state.bmesh;
-  if (!mesh) return;
-  const pos = mesh.geometry.attributes.position;
-  const ref = mesh.geometry.attributes.ref.array, off = mesh.geometry.attributes.off.array;
-  for (let i = 0; i < pos.count; i++) pos.array[i * 3 + 1] = ref[i] * k + off[i];
-  pos.needsUpdate = true;
-  mesh.geometry.computeBoundingSphere();
-  mesh.geometry.computeBoundingBox();
+  [state.bmesh, state.gmesh].forEach((mesh) => {
+    if (!mesh) return;
+    const pos = mesh.geometry.attributes.position;
+    const ref = mesh.geometry.attributes.ref.array, off = mesh.geometry.attributes.off.array;
+    for (let i = 0; i < pos.count; i++) pos.array[i * 3 + 1] = ref[i] * k + off[i];
+    pos.needsUpdate = true;
+    mesh.geometry.computeBoundingSphere();
+    mesh.geometry.computeBoundingBox();
+  });
 }
 
 function colorBuildings(mesh, items, mode, selected) {
@@ -150,7 +153,7 @@ function buildLines(polylines, zref, colorOf) {
 
 // ---------- Scène ----------
 
-function createView(data) {
+function createView(data, projects) {
   const container = $("viewer-canvas");
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -172,9 +175,19 @@ function createView(data) {
   const terrain = buildTerrain(t, zref);
   world.add(terrain.mesh);
 
-  const items = data.buildings || [];
+  // État projeté : existants non démolis + projetés ; les démolis restent visibles en fantômes.
+  const demolis = new Set(projects.demolis);
+  const all = data.buildings || [];
+  const items = all.filter((b) => !demolis.has(b.oid)).concat(projects.buildings);
+  const ghosts = all.filter((b) => demolis.has(b.oid));
   const bmesh = buildBuildings(items, zref);
   if (bmesh) world.add(bmesh);
+  const gmesh = buildBuildings(ghosts, zref);
+  if (gmesh) {
+    gmesh.material.dispose();
+    gmesh.material = new THREE.MeshLambertMaterial({ color: DEMOLI_COLOR, transparent: true, opacity: 0.3, depthWrite: false });
+    world.add(gmesh);
+  }
 
   const roads = data.roads ? buildLines(data.roads.map((r) => ({ pts: r.c, k: r.k, d: r.d })), zref,
     roadColor.class) : null;
@@ -197,7 +210,7 @@ function createView(data) {
   controls.update();
 
   const state = {
-    renderer, scene, camera, controls, world, items, bmesh, terrain: terrain.mesh, roads, contours, zone,
+    renderer, scene, camera, controls, world, items, bmesh, gmesh, terrain: terrain.mesh, roads, contours, zone,
     mode: "source", selected: -1, raf: 0,
   };
   colorBuildings(bmesh, items, state.mode, -1);
@@ -241,7 +254,7 @@ function select(state, k) {
   const b = state.items[k];
   const fmt = (v, u = " m") => (v === null || v === undefined ? "—" : `${v.toLocaleString("fr-CA")}${u}`);
   box.innerHTML = `
-    <strong>${b.n || "Bâtiment sans nom"}</strong><span class="muted"> · ${b.ty}</span>
+    <strong>${escapeHtml(b.n || "Bâtiment sans nom")}</strong><span class="muted"> · ${escapeHtml(b.ty)}</span>
     <dl>
       <dt>HAUTEUR</dt><dd>${fmt(b.h)}</dd>
       <dt>Source</dt><dd>${(SRC[b.s] || {}).label || b.s}</dd>
@@ -301,11 +314,18 @@ function dispose(state) {
 
 // ---------- Interface ----------
 
-function summary(data) {
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function summary(data, projects) {
   const s = data.stats || {};
   const parts = [`${s.zone_km2 ?? "?"} km²`, `EPSG:${s.epsg}`];
   if (s.couverture_lidar !== undefined) parts.push(`LiDAR ${Math.round(s.couverture_lidar * 100)} %`);
   if (s.batiments !== undefined) parts.push(`${s.batiments} bâtiments`);
+  const np = new Set(projects.buildings.map((b) => b.pid)).size;
+  if (np) parts.push(`${np} projeté${np > 1 ? "s" : ""}`);
+  if (projects.demolis.length) parts.push(`${projects.demolis.length} démoli${projects.demolis.length > 1 ? "s" : ""}`);
   if (s.routes !== undefined) parts.push(`${s.routes} tronçons`);
   if (s.routes_djma !== undefined) parts.push(`DJMA sur ${s.routes_djma} tronçons (${s.routes_djma_km} km)`);
   if (data.contour_step > 1) parts.push(`courbes affichées : 1 sur ${data.contour_step}`);
@@ -318,6 +338,7 @@ function bindControls() {
   };
   toggle("v-terrain", "terrain");
   toggle("v-buildings", "bmesh");
+  toggle("v-demolis", "gmesh");
   toggle("v-roads", "roads");
   toggle("v-contours", "contours");
   toggle("v-zone", "zone");
@@ -347,13 +368,16 @@ window.openViewer = async (jobId) => {
   $("viewer-title").textContent = "Chargement de l'aperçu…";
   if (view) { dispose(view); view = null; }
   try {
-    const r = await fetch(`/api/jobs/${jobId}/preview`);
+    await window.flushProjects();
+    const [r, rp] = await Promise.all([fetch(`/api/jobs/${jobId}/preview`), fetch(`/api/jobs/${jobId}/projets`)]);
     if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
     const data = await r.json();
-    view = createView(data);
-    $("viewer-title").textContent = summary(data);
+    const projects = rp.ok ? await rp.json() : { buildings: [], demolis: [] };
+    view = createView(data, projects);
+    $("viewer-title").textContent = summary(data, projects);
+    $("v-demolis-row").classList.toggle("hidden", !view.gmesh);
     // Réapplique l'état des contrôles.
-    ["v-terrain", "v-buildings", "v-roads", "v-contours", "v-zone"].forEach((id) => $(id).dispatchEvent(new Event("change")));
+    ["v-terrain", "v-buildings", "v-demolis", "v-roads", "v-contours", "v-zone"].forEach((id) => $(id).dispatchEvent(new Event("change")));
     $("v-exag").dispatchEvent(new Event("input"));
     view.mode = $("v-mode").value;
     colorBuildings(view.bmesh, view.items, view.mode, -1);

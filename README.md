@@ -33,7 +33,9 @@ Le premier lancement crée `.venv` et installe les dépendances, puis ouvre
    - Clic sur un bâtiment pour afficher `HAUTEUR`, `H_SRC`, `H_LIDAR`, `H_OSM`, `NIVEAUX`.
    - Exagération du relief réglable (les hauteurs des bâtiments restent réelles).
    - Le terrain affiché est allégé (300 × 300 mailles au maximum). Les shapefiles gardent la pleine résolution.
-5. **Générer le ZIP** (sous l'aperçu ou dans la barre de la vue 3D) : écrit les shapefiles et lance le téléchargement.
+5. **Bâtiments projetés** (facultatif) : importer un plan d'architecte (PDF ou DXF), le caler sur la carte, puis
+   saisir les emprises projetées et les bâtiments démolis (voir ci-dessous).
+6. **Générer le ZIP** (sous l'aperçu ou dans la barre de la vue 3D) : écrit les shapefiles et lance le téléchargement.
    Si la zone ou une option change après l'extraction, il faut relancer l'extraction.
 
 Le bouton **Notice** ouvre la notice d'utilisation détaillée. Le survol d'une option affiche une bulle d'aide.
@@ -44,12 +46,36 @@ Ligne de commande (tests) :
 .venv\Scripts\python.exe -m app.cli --bbox -71.232 46.810 -71.219 46.819 --interval 1
 ```
 
+## Bâtiments projetés sur plan calé
+
+L'éditeur affiche côte à côte le plan importé et la carte (imagerie + emprises existantes en jaune).
+
+- **Formats** : PDF (page rendue en image, choix de la page) ou DXF (lignes de l'espace objet, blocs éclatés,
+  calques masquables). Un DWG doit être exporté en DXF.
+- **Rognage** : rectangle autour de la partie utile du plan (sans cartouche ni légende).
+- **Calage** : paires de points plan ↔ carte, avec accrochage aux coins des bâtiments existants (et aux sommets du
+  DXF côté plan). Transformation par moindres carrés, calculée en MTM :
+  - similitude (échelle, rotation, translation), 2 points minimum ;
+  - affine (plan scanné déformé), 3 points minimum ;
+  - échelle du DXF imposée (unités `$INSUNITS` connues), 2 points minimum.
+
+  Écart au sol de chaque point, écart moyen (RMS), échelle déduite (1:n pour un PDF). Avec 3 ou 4 points, le calage
+  est surdéterminé et contrôlable.
+- **Affichage** : opacité réglable, fond blanc transparent (mode produit), masquage du plan.
+- **Saisie** : tracé des emprises (accrochage au DXF, aux existants et aux autres projets), ou prise directe d'une
+  polyligne fermée du DXF. Nom, niveaux (× 3 m) ou hauteur par bâtiment. Altitude du sol : médiane du MNT sous
+  l'emprise.
+- **Démolitions** : clic sur un bâtiment existant, ou marquage automatique de ceux recouverts à plus de 30 %.
+- **Sortie** : `batiments_projetes.shp` séparé, ou fusion dans `batiments.shp`. Le champ `STATUT` vaut
+  `EXISTANT`, `DEMOLI` ou `PROJETE`. Les saisies sont conservées quand l'extraction est relancée.
+
 ## Contenu du ZIP
 
 | Fichier | Géométrie | Attributs principaux |
 |---|---|---|
 | `courbes_niveau.shp` | PolylineZ (Z = altitude) | `ALTITUDE` |
-| `batiments.shp` | Polygone | `HAUTEUR` (m, relative), `H_SRC`, `H_LIDAR`, `H_OSM`, `NIVEAUX`, `ALT_SOL`, `TYPE`, `NOM` |
+| `batiments.shp` | Polygone | `HAUTEUR` (m, relative), `H_SRC`, `H_LIDAR`, `H_OSM`, `NIVEAUX`, `ALT_SOL`, `TYPE`, `NOM`, `STATUT` |
+| `batiments_projetes.shp` (si saisis) | Polygone | `HAUTEUR`, `NIVEAUX`, `ALT_SOL`, `NOM`, `H_SRC` = `PROJET`, `STATUT` = `PROJETE`, `PLAN` |
 | `routes.shp` | Polyligne | `NOM`, `NO_RTE`, `CLASSE`, `CLS_AQ`, `CARACT`, `GESTION`, `VIT_DEF`, `LONG_M`, et avec l'option débits : `DJMA`, `DJME`, `DJMH`, `PCT_CAM`, `H30`, `AN_DJMA`, `NB_CHAUS`, `DJMA_CH`, `SECT_MTMD`, `DJMA_SRC`, `RECOUVR` |
 | `sections_trafic_mtmd.shp` | Polyligne | Sections de trafic MTMD brutes (`DJMA`, `DJME`, `DJMH`, `PCT_CAM`, `H30`, `DEBUT`, `FIN`), pour contrôle |
 | `zone_etude.shp` | Polygone | `SURF_KM2` |
@@ -104,6 +130,9 @@ app/
   traffic.py    Débits MTMD (DJMA…) et rattachement aux routes
   crs.py        Projections MTM / Lambert
   preview.py    Données de l'aperçu 3D (JSON)
+  plans.py      Lecture des plans importés (PDF rendu en image, DXF en polylignes)
+  calage.py     Calage plan -> carte par moindres carrés (similitude, affine, rigide)
+  projets.py    Bâtiments projetés (altitude du sol, recouvrements)
   cli.py        Extraction en ligne de commande
-  static/       Interface (Leaflet + Geoman) et aperçu 3D (three.js, viewer.js)
+  static/       Interface (Leaflet + Geoman), éditeur de calage (plan.js) et aperçu 3D (three.js, viewer.js)
 ```

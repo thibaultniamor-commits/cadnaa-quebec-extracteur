@@ -6,11 +6,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import geopandas as gpd
+import pandas as pd
 from pyproj import Transformer
 from shapely.geometry import shape
 from shapely.ops import transform as shp_transform
 
-from . import buildings, crs, preview, roads, topo, traffic
+from . import buildings, crs, preview, projets, roads, topo, traffic
 
 MAX_AREA_KM2 = 100.0
 ENCODING = "cp1252"  # encodage Windows lu par CadnaA (accents français)
@@ -58,6 +59,11 @@ class Extraction:
     buildings: gpd.GeoDataFrame | None = None
     roads: gpd.GeoDataFrame | None = None
     sections: gpd.GeoDataFrame | None = None
+    terrain: tuple | None = None                # (z, grid) de l'aperçu 3D, repère des volumes
+    projets: gpd.GeoDataFrame | None = None     # bâtiments projetés saisis sur un plan calé
+    projets_items: list = field(default_factory=list)
+    demolis: set = field(default_factory=set)   # OSM_ID des bâtiments existants démolis
+    projets_mode: str = "separe"                # separe : batiments_projetes.shp ; fusion : dans batiments.shp
 
 
 def extract(opts: Options, out_dir: Path, progress=lambda msg: None) -> Extraction:
@@ -131,12 +137,45 @@ def extract(opts: Options, out_dir: Path, progress=lambda msg: None) -> Extracti
         ex.roads = r
 
     progress("Aperçu 3D : préparation…")
-    data = preview.build(zone, preview.terrain(ex.dtm, ex.grid, zone, bbox_ll, epsg), buildings=ex.buildings,
-                         roads=ex.roads, contours=ex.contours, stats=summary)
+    ex.terrain = preview.terrain(ex.dtm, ex.grid, zone, bbox_ll, epsg)
+    data = preview.build(zone, ex.terrain, buildings=ex.buildings, roads=ex.roads, contours=ex.contours,
+                         stats=summary)
     preview.write(ex.preview_path, data)
     summary["duree_s"] = round(time.time() - t0, 1)
     progress(f"Extraction terminée en {summary['duree_s']} s.")
     return ex
+
+
+def set_projets(ex: Extraction, items: list, demolis: list, mode: str) -> dict:
+    """Enregistre les bâtiments projetés et démolis ; renvoie l'altitude du sol et les recouvrements."""
+    z, grid = (ex.dtm, ex.grid) if ex.dtm is not None else ex.terrain
+    p = projets.build(items, ex.epsg, z, grid)
+    known = set(ex.buildings.OSM_ID) if ex.buildings is not None else set()
+    ex.projets, ex.demolis, ex.projets_mode = p, set(demolis) & known, mode
+    ex.projets_items = preview.building_items(p, preview.Frame(ex.terrain)) if len(p) else []
+    return {
+        "alt_sol": {pid: (None if pd.isna(a) else a) for pid, a in zip(p.PROJ_ID, p.ALT_SOL)},
+        "surface": {pid: round(a, 1) for pid, a in zip(p.PROJ_ID, p.geometry.area)},
+        "recouverts": projets.covered(ex.buildings, p),
+        "hors_zone": [pid for pid, g in zip(p.PROJ_ID, p.geometry) if not g.intersects(ex.zone)],
+        "demolis": sorted(ex.demolis),
+    }
+
+
+def _buildings_out(ex: Extraction):
+    """(batiments.shp, batiments_projetes.shp) selon le mode de sortie ; STATUT = EXISTANT | DEMOLI | PROJETE."""
+    b = ex.buildings
+    if b is not None:
+        b = b.copy()
+        b["STATUT"] = ["DEMOLI" if o in ex.demolis else "EXISTANT" for o in b.OSM_ID]
+    p = ex.projets.drop(columns="PROJ_ID") if ex.projets is not None and len(ex.projets) else None
+    if p is None or ex.projets_mode == "separe":
+        return b, p
+    if b is None:
+        return p, None
+    b["PLAN"] = ""
+    merged = pd.concat([b, p.to_crs(b.crs)], ignore_index=True)
+    return gpd.GeoDataFrame(merged, geometry="geometry", crs=b.crs), None
 
 
 def package(ex: Extraction, out_dir: Path) -> Path:
@@ -150,13 +189,16 @@ def package(ex: Extraction, out_dir: Path) -> Path:
         _write(ex.contours, folder / "courbes_niveau.shp", epsg)
         if ex.opts.dem_grid:
             topo.write_ascii_grid(folder / "mnt.asc", ex.dtm, ex.grid)
-    if ex.buildings is not None:
-        _write(ex.buildings, folder / "batiments.shp", epsg)
+    existing, projected = _buildings_out(ex)
+    if existing is not None:
+        _write(existing, folder / "batiments.shp", epsg)
+    if projected is not None:
+        _write(projected, folder / "batiments_projetes.shp", epsg)
     if ex.sections is not None and len(ex.sections):
         _write(ex.sections, folder / "sections_trafic_mtmd.shp", epsg)
     if ex.roads is not None:
         _write(ex.roads, folder / "routes.shp", epsg)
-    (folder / "LISEZMOI.txt").write_text(_readme(ex.opts, s), encoding="utf-8")
+    (folder / "LISEZMOI.txt").write_text(_readme(ex.opts, s, ex), encoding="utf-8")
     zip_path = Path(shutil.make_archive(str(folder), "zip", folder))
     shutil.rmtree(folder, ignore_errors=True)
     return zip_path
@@ -168,7 +210,7 @@ def run(opts: Options, out_dir: Path, progress=lambda msg: None) -> tuple[Path, 
     return package(ex, out_dir), ex.summary
 
 
-def _readme(opts, s):
+def _readme(opts, s, ex=None):
     lines = [
         "Extraction CadnaA - Québec",
         f"Généré le {dt.datetime.now():%Y-%m-%d %H:%M}",
@@ -193,7 +235,9 @@ def _readme(opts, s):
             "                      H_SRC   : LIDAR (DSM-DTM médian) | OSM_H (tag height) | OSM_NIV (niveaux x 3 m) | DEFAUT",
             "                      H_LIDAR, H_OSM, NIVEAUX : valeurs brutes pour contrôle ; ALT_SOL : altitude du sol (m)",
             f"                      Répartition des sources : {s.get('hauteurs')}",
+            "                      STATUT  : EXISTANT | DEMOLI (bâtiment existant à retirer dans l'état projeté)",
         ]
+    lines += _readme_projets(ex)
     if "routes" in s:
         lines += [
             f"  routes.shp          {s['routes']} tronçons ({s['routes_km']} km, polylignes)",
@@ -219,6 +263,7 @@ def _readme(opts, s):
         "  Dans les options d'import, affecter le type d'objet et les attributs :",
         "    courbes_niveau.shp -> Courbe de niveau ; hauteur = coordonnée Z (ou attribut ALTITUDE)",
         "    batiments.shp      -> Bâtiment ; hauteur = HAUTEUR (relative)",
+        "    batiments_projetes.shp -> Bâtiment ; hauteur = HAUTEUR (relative) ; à placer dans une variante",
         "    routes.shp         -> Route ; nom = NOM ; vitesse = VIT_DEF (à vérifier) ; DTV/DJMA = DJMA_CH ; % PL = PCT_CAM",
         "    zone_etude.shp     -> Limite de calcul (facultatif)",
         "",
@@ -230,3 +275,18 @@ def _readme(opts, s):
         "  Les données sont fournies à titre indicatif : vérifier avant toute étude réglementaire.",
     ]
     return "\r\n".join(lines) + "\r\n"
+
+
+def _readme_projets(ex):
+    if ex is None or ex.projets is None or not len(ex.projets):
+        return []
+    n, nd = len(ex.projets), len(ex.demolis)
+    where = ("batiments_projetes.shp" if ex.projets_mode == "separe"
+             else "batiments.shp (STATUT = PROJETE)")
+    return [
+        f"  Bâtiments projetés : {n} emprise(s) saisie(s) sur plan calé, dans {where}",
+        "                      H_SRC = PROJET ; HAUTEUR saisie ; NIVEAUX saisis ; ALT_SOL : terrain médian sous l'emprise",
+        "                      PLAN : fichier du plan source",
+        f"                      Bâtiments existants démolis : {nd} (STATUT = DEMOLI dans batiments.shp)",
+        "                      État projeté = bâtiments EXISTANT + PROJETE ; état actuel = EXISTANT + DEMOLI.",
+    ]
