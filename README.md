@@ -25,7 +25,7 @@ run.bat
 Le premier lancement crée `.venv` et installe les dépendances, puis ouvre
 <http://127.0.0.1:8000>.
 
-1. Rechercher un lieu, dessiner un **rectangle** ou un **polygone** (modifiable à la souris).
+1. Rechercher un lieu (les **dalles LiDAR Forêt ouverte** s'affichent sur la carte, voir ci-dessous), dessiner un **rectangle** ou un **polygone** (modifiable à la souris).
 2. Choisir les couches et options.
 3. **Extraire et prévisualiser** : les données sont calculées puis l'aperçu 3D s'ouvre (aucun ZIP n'est encore écrit).
 4. **Aperçu 3D (validation)** : terrain, bâtiments extrudés, routes, courbes de niveau et limite de zone.
@@ -92,9 +92,21 @@ ou Lambert Québec (EPSG:32198). Encodage des attributs : CP1252 (fichier `.cpg`
 | Topographie | RNCan **HRDEM 1 m** (LiDAR, DTM) ; complété par **MRDEM 30 m** hors couverture LiDAR | COG sur S3 + API STAC `datacube.services.geo.ca` |
 | Bâtiments | Emprises **OpenStreetMap** (Overpass) | Hauteur = médiane (DSM − DTM) HRDEM, sinon tag `height`, sinon `building:levels` × 3 m, sinon valeur par défaut |
 | Routes | **AQréseau+** (Adresses Québec, MRNF) | ArcGIS REST `servicescarto.mrnf.gouv.qc.ca` |
+| Carte : dalles LiDAR | Index des feuillets 1/20 000 du **MNT LiDAR 1 m** (MRNF, Forêt ouverte) + année d'acquisition ; relief ombré LiDAR | `URL_Lidar.geojson` + `Metadonnees.zip` (`diffusion.mffp.gouv.qc.ca`), WMS `geoegl.msp.gouv.qc.ca/ws/mffpecofor.fcgi` |
 | Débits | **Débit de circulation** (MTMD) : DJMA, DJME, DJMH, % camions, 30e heure (année la plus récente disponible) | WFS `ws.mapserver.transports.gouv.qc.ca` (`ms:circulation_routier`) |
 
-Licences : Licence du gouvernement ouvert – Canada (RNCan), ODbL (OSM), CC-BY 4.0 (Adresses Québec, MTMD).
+Licences : Licence du gouvernement ouvert – Canada (RNCan), ODbL (OSM), CC-BY 4.0 (Adresses Québec, MTMD, MRNF).
+
+### Dalles LiDAR Forêt ouverte
+
+La carte affiche par défaut les feuillets du MNT LiDAR 1 m du MRNF, colorés selon l'année d'acquisition
+la plus récente (jointure avec l'index des acquisitions, recouvrement d'au moins 2 % du feuillet). Un clic donne
+les années, la densité de points, la source et les liens de téléchargement. Le sélecteur de couches permet de
+masquer les dalles et d'activer le relief ombré LiDAR (WMS MRNF) ; le panneau en bas à gauche règle leur transparence.
+
+L'index est gardé en cache dans `cache/foretouverte/`. Au démarrage (au plus une fois par jour) et sur le bouton
+**Mettre à jour**, l'outil compare l'en-tête `Last-Modified` des fichiers du MRNF et ne retélécharge que ce qui a changé.
+Le premier lancement télécharge environ 10 Mo et prend une vingtaine de secondes.
 
 ### Rattachement des débits MTMD aux routes
 
@@ -125,6 +137,7 @@ app/
   main.py       API FastAPI + tâches de fond
   pipeline.py   Orchestration, écriture des shapefiles, LISEZMOI
   topo.py       MNT (HRDEM/MRDEM) et courbes de niveau
+  foretouverte.py  Index des dalles LiDAR MRNF (cache + mise à jour)
   buildings.py  Bâtiments OSM + hauteurs LiDAR
   roads.py      Routes AQréseau+
   traffic.py    Débits MTMD (DJMA…) et rattachement aux routes
@@ -134,5 +147,5 @@ app/
   calage.py     Calage plan -> carte par moindres carrés (similitude, affine, rigide)
   projets.py    Bâtiments projetés (altitude du sol, recouvrements)
   cli.py        Extraction en ligne de commande
-  static/       Interface (Leaflet + Geoman), éditeur de calage (plan.js) et aperçu 3D (three.js, viewer.js)
+  static/       Interface (Leaflet + Geoman), dalles LiDAR (lidar.js), éditeur de calage (plan.js) et aperçu 3D (three.js, viewer.js)
 ```

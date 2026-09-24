@@ -278,6 +278,16 @@
             <li>Après le tracé, les sommets restent déplaçables à la souris. <b>Effacer</b> supprime la zone.</li>
             <li>Le fond <b>Imagerie</b> (sélecteur en haut à droite de la carte) aide à caler la zone sur le terrain.</li>
           </ul>
+          <h4>Dalles LiDAR Forêt ouverte</h4>
+          <p>Les feuillets 1/20 000 du MNT LiDAR 1 m diffusé par le MRNF (Forêt ouverte) s'affichent par défaut,
+            colorés selon l'année d'acquisition la plus récente. Ils montrent où un LiDAR provincial existe et son âge.</p>
+          <ul>
+            <li>Cliquer un feuillet : années d'acquisition, densité de points, source, liens de téléchargement du MNT.</li>
+            <li>Sélecteur de couches : afficher ou masquer les dalles, et activer le <b>relief ombré LiDAR</b> (WMS du MRNF).</li>
+            <li>Panneau en bas à gauche : légende, transparence des dalles et du relief, date de l'index.</li>
+            <li><b>Mettre à jour</b> : vérifie si le MRNF a publié un nouvel index ou de nouvelles acquisitions.
+              La vérification se fait aussi automatiquement au démarrage, au plus une fois par jour.</li>
+          </ul>
           <p>La surface et la projection qui sera utilisée s'affichent sous les boutons.
             Maximum : <b>100 km²</b>. Au-delà de 25 km², l'extraction prend plusieurs minutes.</p>
           <p>Conseil : prévoir une marge autour des récepteurs et des sources. Les bâtiments et le relief
@@ -462,6 +472,7 @@
           <h3>Sources et licences</h3>
           <ul>
             <li>Topographie : RNCan, HRDEM 1 m et MRDEM 30 m – Licence du gouvernement ouvert – Canada</li>
+            <li>Dalles et relief ombré LiDAR : MRNF, Forêt ouverte – CC-BY 4.0</li>
             <li>Bâtiments : © contributeurs OpenStreetMap – ODbL 1.0</li>
             <li>Routes : Adresses Québec, AQréseau+ – MRNF – CC-BY 4.0</li>
             <li>Débits : Débit de circulation – MTMD – CC-BY 4.0</li>
@@ -482,6 +493,7 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.js"></script>
   <script src="/static/app.js"></script>
+  <script src="/static/lidar.js"></script>
   <script src="/static/plan.js"></script>
 </body>
 </html>

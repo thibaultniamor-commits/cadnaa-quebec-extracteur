@@ -14,7 +14,7 @@ const osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
 const ortho = L.tileLayer(
   "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
   { maxZoom: 19, attribution: "Imagerie © Esri" });
-L.control.layers({ "Plan (OSM)": osm, "Imagerie": ortho }).addTo(map);
+const layerControl = L.control.layers({ "Plan (OSM)": osm, "Imagerie": ortho }).addTo(map);
 L.rectangle(QC_BOUNDS, { color: "#888", weight: 1, fill: false, dashArray: "4 4", interactive: false }).addTo(map);
 L.control.scale({ imperial: false }).addTo(map);
 

@@ -3,24 +3,34 @@ import threading
 import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import calage, crs, pipeline, plans
+from . import calage, crs, foretouverte, pipeline, plans
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT = ROOT.parent / "output"
 STATIC = ROOT / "static"
 
-app = FastAPI(title="Extracteur CadnaA - Québec")
+
+@asynccontextmanager
+async def lifespan(_app):
+    foretouverte.update_in_background()  # vérifie au plus une fois par jour si le MRNF a publié un nouvel index
+    yield
+
+
+app = FastAPI(title="Extracteur CadnaA - Québec", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
+app.add_middleware(GZipMiddleware, minimum_size=50_000)
 
 _executor = ThreadPoolExecutor(max_workers=2)
 _jobs: dict[str, dict] = {}
@@ -52,6 +62,25 @@ def index():
 def crs_for(lon: float):
     epsg = crs.resolve("auto", lon)
     return {"epsg": epsg, "name": crs.name(epsg), "zone": crs.mtm_zone(lon)}
+
+
+# ---------- Dalles LiDAR Forêt ouverte ----------
+
+@app.get("/api/lidar/etat")
+def lidar_state():
+    return foretouverte.etat()
+
+
+@app.get("/api/lidar/dalles")
+def lidar_tiles():
+    if not foretouverte.DALLES.exists():
+        raise HTTPException(503, "Index des dalles en cours de téléchargement.")
+    return FileResponse(foretouverte.DALLES, media_type="application/geo+json", headers={"Cache-Control": "no-cache"})
+
+
+@app.post("/api/lidar/maj")
+def lidar_update():
+    return foretouverte.update(force=True)
 
 
 @app.post("/api/extract")
