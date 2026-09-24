@@ -27,12 +27,16 @@ Le premier lancement crée `.venv` et installe les dépendances, puis ouvre
 
 1. Rechercher un lieu, dessiner un **rectangle** ou un **polygone** (modifiable à la souris).
 2. Choisir les couches et options.
-3. **Générer le ZIP**. Le téléchargement démarre automatiquement.
+3. **Extraire et prévisualiser** : les données sont calculées puis l'aperçu 3D s'ouvre (aucun ZIP n'est encore écrit).
 4. **Aperçu 3D (validation)** : terrain, bâtiments extrudés, routes, courbes de niveau et limite de zone.
    - Bâtiments colorés par source de hauteur (LiDAR, OSM, défaut) ou par hauteur ; routes par classe ou par DJMA.
    - Clic sur un bâtiment pour afficher `HAUTEUR`, `H_SRC`, `H_LIDAR`, `H_OSM`, `NIVEAUX`.
    - Exagération du relief réglable (les hauteurs des bâtiments restent réelles).
    - Le terrain affiché est allégé (300 × 300 mailles au maximum). Les shapefiles gardent la pleine résolution.
+5. **Générer le ZIP** (sous l'aperçu ou dans la barre de la vue 3D) : écrit les shapefiles et lance le téléchargement.
+   Si la zone ou une option change après l'extraction, il faut relancer l'extraction.
+
+Le bouton **Notice** ouvre la notice d'utilisation détaillée. Le survol d'une option affiche une bulle d'aide.
 
 Ligne de commande (tests) :
 

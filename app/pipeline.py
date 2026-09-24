@@ -44,7 +44,24 @@ def _write(gdf, path, epsg):
     gdf.to_file(path, driver="ESRI Shapefile", encoding=ENCODING, engine="pyogrio")
 
 
-def run(opts: Options, out_dir: Path, progress=lambda msg: None) -> tuple[Path, dict]:
+@dataclass
+class Extraction:
+    """Données extraites, gardées en mémoire entre l'aperçu 3D et l'écriture du ZIP."""
+    opts: Options
+    epsg: int
+    zone: object
+    summary: dict
+    preview_path: Path
+    dtm: object = None
+    grid: object = None
+    contours: gpd.GeoDataFrame | None = None
+    buildings: gpd.GeoDataFrame | None = None
+    roads: gpd.GeoDataFrame | None = None
+    sections: gpd.GeoDataFrame | None = None
+
+
+def extract(opts: Options, out_dir: Path, progress=lambda msg: None) -> Extraction:
+    """Télécharge et calcule toutes les couches, puis écrit les données de l'aperçu 3D."""
     t0 = time.time()
     zone_ll = shape(opts.geometry)
     if zone_ll.geom_type != "Polygon" or not zone_ll.is_valid:
@@ -60,16 +77,12 @@ def run(opts: Options, out_dir: Path, progress=lambda msg: None) -> tuple[Path, 
         raise ValueError(f"Zone trop grande ({area_km2:.1f} km², maximum {MAX_AREA_KM2:.0f} km²).")
     progress(f"Zone : {area_km2:.2f} km² — projection {crs.name(epsg)} (EPSG:{epsg})")
 
+    out_dir.mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    folder = out_dir / f"cadnaa_qc_{stamp}"
-    folder.mkdir(parents=True, exist_ok=True)
     bbox_ll = zone_ll.buffer(0.001).bounds
     summary = {"zone_km2": round(area_km2, 3), "epsg": epsg, "crs": crs.name(epsg)}
+    ex = Extraction(opts, epsg, zone, summary, out_dir / f"cadnaa_qc_{stamp}_apercu.json")
 
-    _write(gpd.GeoDataFrame({"NOM": ["Zone d'étude"], "SURF_KM2": [round(area_km2, 3)]}, geometry=[zone]),
-           folder / "zone_etude.shp", epsg)
-
-    dtm = grid = contours_gdf = b = r = None
     if "topo" in opts.layers:
         res = opts.dem_resolution or auto_resolution(area_km2)
         grid = topo.Grid.covering(zone.buffer(3 * res + opts.smoothing_m * 3).bounds, res, f"EPSG:{epsg}")
@@ -77,14 +90,11 @@ def run(opts: Options, out_dir: Path, progress=lambda msg: None) -> tuple[Path, 
         dtm, lidar_frac = topo.build_dtm(bbox_ll, grid)
         progress(f"Topographie : couverture LiDAR {lidar_frac:.0%} (reste : MRDEM 30 m). Calcul des courbes…")
         lines = topo.contours(dtm, grid, opts.contour_interval, zone, opts.smoothing_m)
-        gdf = gpd.GeoDataFrame({"ALTITUDE": [z for z, _ in lines]}, geometry=[g for _, g in lines])
-        _write(gdf, folder / "courbes_niveau.shp", epsg)
-        contours_gdf = gdf
-        if opts.dem_grid:
-            topo.write_ascii_grid(folder / "mnt.asc", dtm, grid)
-        summary.update(courbes=len(gdf), mnt_resolution_m=res, couverture_lidar=round(lidar_frac, 3),
+        ex.contours = gpd.GeoDataFrame({"ALTITUDE": [z for z, _ in lines]}, geometry=[g for _, g in lines])
+        ex.dtm, ex.grid = dtm, grid
+        summary.update(courbes=len(ex.contours), mnt_resolution_m=res, couverture_lidar=round(lidar_frac, 3),
                        equidistance_m=opts.contour_interval)
-        progress(f"Topographie : {len(gdf)} courbes de niveau.")
+        progress(f"Topographie : {len(ex.contours)} courbes de niveau.")
 
     if "batiments" in opts.layers:
         progress("Bâtiments : téléchargement OpenStreetMap…")
@@ -98,8 +108,7 @@ def run(opts: Options, out_dir: Path, progress=lambda msg: None) -> tuple[Path, 
             h, ground = buildings.lidar_heights(b, hgrid, b_dtm, b_dsm)
         else:
             h = ground = []
-        b = buildings.assign_heights(b, h, ground, opts.default_height)
-        _write(b, folder / "batiments.shp", epsg)
+        ex.buildings = b = buildings.assign_heights(b, h, ground, opts.default_height)
         counts = b["H_SRC"].value_counts().to_dict() if len(b) else {}
         summary.update(batiments=len(b), hauteurs=counts)
         progress(f"Bâtiments : {len(b)} — sources des hauteurs {counts}")
@@ -113,26 +122,50 @@ def run(opts: Options, out_dir: Path, progress=lambda msg: None) -> tuple[Path, 
             progress("Débits : sections de trafic MTMD…")
             sections = traffic.fetch(zone_ll).to_crs(epsg)
             r, sections = traffic.attach(r, sections, zone)
-            if len(sections):
-                _write(sections, folder / "sections_trafic_mtmd.shp", epsg)
+            ex.sections = sections
             with_djma = r.DJMA_SRC == "MTMD"
             summary.update(sections_mtmd=len(sections), routes_djma=int(with_djma.sum()),
                            routes_djma_km=round(float(r.geometry[with_djma].length.sum()) / 1000, 2))
             progress(f"Débits : {len(sections)} sections MTMD, DJMA rattaché à {summary['routes_djma']} tronçons "
                      f"({summary['routes_djma_km']} km).")
-        _write(r, folder / "routes.shp", epsg)
-
-    (folder / "LISEZMOI.txt").write_text(_readme(opts, summary), encoding="utf-8")
-    zip_path = Path(shutil.make_archive(str(folder), "zip", folder))
-    shutil.rmtree(folder, ignore_errors=True)
+        ex.roads = r
 
     progress("Aperçu 3D : préparation…")
-    data = preview.build(zone, preview.terrain(dtm, grid, zone, bbox_ll, epsg), buildings=b, roads=r,
-                         contours=contours_gdf, stats=summary)
-    preview.write(preview.path_for(zip_path), data)
+    data = preview.build(zone, preview.terrain(ex.dtm, ex.grid, zone, bbox_ll, epsg), buildings=ex.buildings,
+                         roads=ex.roads, contours=ex.contours, stats=summary)
+    preview.write(ex.preview_path, data)
     summary["duree_s"] = round(time.time() - t0, 1)
-    progress(f"Terminé en {summary['duree_s']} s.")
-    return zip_path, summary
+    progress(f"Extraction terminée en {summary['duree_s']} s.")
+    return ex
+
+
+def package(ex: Extraction, out_dir: Path) -> Path:
+    """Écrit les shapefiles de l'extraction et les regroupe dans un ZIP."""
+    folder = out_dir / ex.preview_path.name.removesuffix("_apercu.json")
+    folder.mkdir(parents=True, exist_ok=True)
+    epsg, s = ex.epsg, ex.summary
+    _write(gpd.GeoDataFrame({"NOM": ["Zone d'étude"], "SURF_KM2": [s["zone_km2"]]}, geometry=[ex.zone]),
+           folder / "zone_etude.shp", epsg)
+    if ex.contours is not None:
+        _write(ex.contours, folder / "courbes_niveau.shp", epsg)
+        if ex.opts.dem_grid:
+            topo.write_ascii_grid(folder / "mnt.asc", ex.dtm, ex.grid)
+    if ex.buildings is not None:
+        _write(ex.buildings, folder / "batiments.shp", epsg)
+    if ex.sections is not None and len(ex.sections):
+        _write(ex.sections, folder / "sections_trafic_mtmd.shp", epsg)
+    if ex.roads is not None:
+        _write(ex.roads, folder / "routes.shp", epsg)
+    (folder / "LISEZMOI.txt").write_text(_readme(ex.opts, s), encoding="utf-8")
+    zip_path = Path(shutil.make_archive(str(folder), "zip", folder))
+    shutil.rmtree(folder, ignore_errors=True)
+    return zip_path
+
+
+def run(opts: Options, out_dir: Path, progress=lambda msg: None) -> tuple[Path, dict]:
+    """Extraction complète jusqu'au ZIP (ligne de commande)."""
+    ex = extract(opts, out_dir, progress)
+    return package(ex, out_dir), ex.summary
 
 
 def _readme(opts, s):

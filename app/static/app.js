@@ -67,6 +67,7 @@ function zoneGeometry() {
 
 async function updateZone() {
   const info = $("zone-info");
+  checkStale();
   if (!zone) {
     info.className = "info muted";
     info.textContent = "Dessinez la zone sur la carte.";
@@ -123,13 +124,10 @@ function log(msg, cls = "") {
   $("log").appendChild(li);
 }
 
-$("go").onclick = async () => {
-  if (!zone) return;
-  const layers = [...document.querySelectorAll("input[name=layer]:checked")].map((i) => i.value);
-  if (!layers.length) { log("Sélectionnez au moins une couche.", "err"); return; }
-  const body = {
+function requestBody() {
+  return {
     geometry: zoneGeometry(),
-    layers,
+    layers: [...document.querySelectorAll("input[name=layer]:checked")].map((i) => i.value),
     contour_interval: Number($("interval").value),
     dem_resolution: $("resolution").value ? Number($("resolution").value) : null,
     smoothing_m: Number($("smoothing").value),
@@ -138,6 +136,27 @@ $("go").onclick = async () => {
     dem_grid: $("dem-grid").checked,
     traffic: $("traffic").checked,
   };
+}
+
+// Extraction courante : sert à l'aperçu 3D et à la génération du ZIP.
+let job = null;   // { id, params, zip }
+
+// Signale que la zone ou les options ne correspondent plus à l'extraction affichée.
+function checkStale() {
+  if (!job) return;
+  const stale = !zone || JSON.stringify(requestBody()) !== job.params;
+  $("stale").classList.toggle("hidden", !stale);
+  $("make-zip").disabled = stale;
+  $("viewer-zip").disabled = stale;
+}
+$("panel").addEventListener("change", checkStale);
+$("panel").addEventListener("input", checkStale);
+
+$("go").onclick = async () => {
+  if (!zone) return;
+  const body = requestBody();
+  if (!body.layers.length) { log("Sélectionnez au moins une couche.", "err"); return; }
+  job = null;
   $("log").innerHTML = "";
   $("results").classList.add("hidden");
   $("go").disabled = true;
@@ -148,11 +167,17 @@ $("go").onclick = async () => {
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail ? JSON.stringify(d.detail) : r.statusText);
-    await poll(d.job_id);
+    if (await poll(d.job_id)) {
+      job = { id: d.job_id, params: JSON.stringify(body), zip: null };
+      $("make-zip").textContent = "Générer le ZIP";
+      $("results").classList.remove("hidden");
+      checkStale();
+      window.openViewer(job.id);
+    }
   } catch (err) {
     log(`Erreur : ${err.message}`, "err");
   } finally {
-    $("go").textContent = "Générer le ZIP";
+    $("go").textContent = "Extraire et prévisualiser";
     $("go").disabled = !zone;
   }
 };
@@ -164,16 +189,83 @@ async function poll(jobId) {
     d.messages.slice(shown).forEach((m) => log(m));
     shown = d.messages.length;
     if (d.status === "termine") {
-      log("ZIP prêt.", "ok");
-      $("download").href = `/api/jobs/${jobId}/download`;
-      $("open-3d").onclick = () => window.openViewer(jobId);
-      $("results").classList.remove("hidden");
-      $("download").click();
-      return;
+      log("Données prêtes : vérifiez l'aperçu 3D, puis générez le ZIP.", "ok");
+      return true;
     }
-    if (d.status === "erreur") { log(d.error, "err"); return; }
+    if (d.status === "erreur") { log(d.error, "err"); return false; }
     await new Promise((res) => setTimeout(res, 1500));
   }
 }
+
+$("open-3d").onclick = () => { if (job) window.openViewer(job.id); };
+
+async function makeZip() {
+  if (!job) return;
+  const buttons = [$("make-zip"), $("viewer-zip")];
+  buttons.forEach((b) => { b.disabled = true; b.textContent = "Écriture du ZIP…"; });
+  try {
+    if (!job.zip) {
+      const r = await fetch(`/api/jobs/${job.id}/zip`, { method: "POST" });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || r.statusText);
+      job.zip = d.name;
+      log(`ZIP généré : ${d.name}`, "ok");
+    }
+    $("download").href = `/api/jobs/${job.id}/download`;
+    $("download").click();
+    buttons.forEach((b) => { b.textContent = "Télécharger à nouveau le ZIP"; });
+  } catch (err) {
+    log(`Erreur : ${err.message}`, "err");
+    buttons.forEach((b) => { b.textContent = "Générer le ZIP"; });
+  } finally {
+    checkStale();
+  }
+}
+$("make-zip").onclick = makeZip;
+$("viewer-zip").onclick = makeZip;
+
+// ---------- Notice ----------
+function openHelp(anchor) {
+  const dlg = $("help");
+  if (!dlg.open) dlg.showModal();
+  const target = anchor && document.getElementById(anchor);
+  dlg.querySelector("article").scrollTop = target ? target.offsetTop - 8 : 0;
+}
+$("open-help").onclick = () => openHelp();
+$("viewer-help").onclick = () => openHelp("h-apercu");
+$("help-close").onclick = () => $("help").close();
+$("help").addEventListener("click", (e) => { if (e.target === $("help")) $("help").close(); });
+$("help").querySelectorAll(".help-toc a").forEach((a) => {
+  a.onclick = (e) => { e.preventDefault(); openHelp(a.getAttribute("href").slice(1)); };
+});
+
+// ---------- Bulles d'aide (survol et focus des éléments [data-tip]) ----------
+const tip = $("tip");
+let tipTarget = null;
+function showTip(el) {
+  tipTarget = el;
+  tip.textContent = el.dataset.tip;
+  tip.classList.remove("hidden");
+  const r = el.getBoundingClientRect(), t = tip.getBoundingClientRect();
+  const pad = 8;
+  let x = Math.min(Math.max(pad, r.left), window.innerWidth - t.width - pad);
+  let y = r.bottom + 6;
+  if (y + t.height > window.innerHeight - pad) y = r.top - t.height - 6;
+  tip.style.left = `${x}px`;
+  tip.style.top = `${Math.max(pad, y)}px`;
+}
+function hideTip() { tipTarget = null; tip.classList.add("hidden"); }
+document.addEventListener("mouseover", (e) => {
+  const el = e.target.closest("[data-tip]");
+  if (el === tipTarget) return;
+  if (el) showTip(el); else hideTip();
+});
+document.addEventListener("focusin", (e) => {
+  const el = e.target.closest("[data-tip]");
+  if (el) showTip(el); else hideTip();
+});
+document.addEventListener("focusout", hideTip);
+document.addEventListener("scroll", hideTip, true);
+document.addEventListener("mousedown", hideTip);
 
 updateZone();

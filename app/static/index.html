@@ -13,29 +13,32 @@
 
   <aside id="panel">
     <header>
-      <h1>Extracteur CadnaA</h1>
+      <div class="title-row">
+        <h1>Extracteur CadnaA</h1>
+        <button id="open-help" type="button" class="ghost small-btn" data-tip="Notice d'utilisation détaillée : étapes, options, contenu du ZIP, import dans CadnaA.">Notice</button>
+      </div>
       <p class="sub">Topographie, bâtiments et routes — Québec</p>
     </header>
 
     <section>
       <h2><span class="step">1</span> Zone d'étude</h2>
       <form id="search" class="row">
-        <input id="q" type="search" placeholder="Rechercher une adresse, une ville…">
+        <input id="q" type="search" placeholder="Rechercher une adresse, une ville…" data-tip="Recherche OpenStreetMap (Nominatim), limitée au Québec. La carte se centre sur le résultat ; il reste à dessiner la zone.">
         <button type="submit" class="ghost">Aller</button>
       </form>
       <div class="row">
-        <button id="draw-rect" type="button">Rectangle</button>
-        <button id="draw-poly" type="button">Polygone</button>
-        <button id="clear" type="button" class="ghost">Effacer</button>
+        <button id="draw-rect" type="button" data-tip="Cliquer un premier coin sur la carte, puis le coin opposé. Les coins restent déplaçables ensuite.">Rectangle</button>
+        <button id="draw-poly" type="button" data-tip="Cliquer chaque sommet, puis cliquer le premier point pour fermer. Les sommets restent déplaçables ; le polygone ne doit pas se croiser.">Polygone</button>
+        <button id="clear" type="button" class="ghost" data-tip="Supprime la zone dessinée.">Effacer</button>
       </div>
-      <div id="zone-info" class="info muted">Dessinez la zone sur la carte.</div>
+      <div id="zone-info" class="info muted" data-tip="Surface maximale : 100 km². Au-delà de 25 km², l'extraction peut prendre plusieurs minutes.">Dessinez la zone sur la carte.</div>
     </section>
 
     <section>
       <h2><span class="step">2</span> Couches</h2>
-      <label class="check"><input type="checkbox" name="layer" value="topo" checked> Topographie (courbes de niveau)</label>
+      <label class="check" data-tip="Courbes de niveau 3D (PolylineZ) calculées sur le MNT LiDAR HRDEM 1 m de RNCan, complété par le MRDEM 30 m hors couverture LiDAR. Altitudes CGVD2013."><input type="checkbox" name="layer" value="topo" checked> Topographie (courbes de niveau)</label>
       <div class="sub-opts">
-        <label>Équidistance
+        <label data-tip="Écart d'altitude entre deux courbes. 0,5 à 1 m en milieu plat ou urbain ; 2 à 5 m en relief marqué, pour limiter le volume du modèle CadnaA.">Équidistance
           <select id="interval">
             <option value="0.5">0,5 m</option>
             <option value="1" selected>1 m</option>
@@ -44,7 +47,7 @@
             <option value="10">10 m</option>
           </select>
         </label>
-        <label>Résolution MNT
+        <label data-tip="Taille des mailles du MNT servant à tracer les courbes. Auto : 1 m jusqu'à 4 km², 2 m jusqu'à 25 km², 5 m au-delà. Une maille plus fine donne plus de détail mais des fichiers plus lourds.">Résolution MNT
           <select id="resolution">
             <option value="" selected>Auto</option>
             <option value="1">1 m</option>
@@ -53,7 +56,7 @@
             <option value="10">10 m</option>
           </select>
         </label>
-        <label>Lissage
+        <label data-tip="Lissage gaussien du MNT avant le tracé des courbes (rayon en mètres). Supprime le bruit LiDAR (véhicules, végétation basse, bordures). Aucun : courbes brutes, très dentelées.">Lissage
           <select id="smoothing">
             <option value="0">Aucun</option>
             <option value="3" selected>3 m</option>
@@ -61,25 +64,25 @@
             <option value="10">10 m</option>
           </select>
         </label>
-        <label class="check small"><input type="checkbox" id="dem-grid"> Joindre le MNT en grille ASCII (.asc)</label>
+        <label class="check small" data-tip="Ajoute mnt.asc : le MNT non lissé en grille ESRI ASCII, dans la même projection. Utile pour un import en grille ou un contrôle dans un SIG."><input type="checkbox" id="dem-grid"> Joindre le MNT en grille ASCII (.asc)</label>
       </div>
 
-      <label class="check"><input type="checkbox" name="layer" value="batiments" checked> Bâtiments (avec hauteurs)</label>
+      <label class="check" data-tip="Emprises OpenStreetMap. Hauteur, par priorité : médiane LiDAR (surface − sol), sinon tag OSM height, sinon nombre d'étages × 3 m, sinon hauteur par défaut. Le champ H_SRC indique la source retenue."><input type="checkbox" name="layer" value="batiments" checked> Bâtiments (avec hauteurs)</label>
       <div class="sub-opts">
-        <label>Hauteur par défaut
+        <label data-tip="Hauteur donnée aux bâtiments sans LiDAR exploitable ni information OSM (H_SRC = DEFAUT). 6 m correspond environ à un bâtiment de deux étages.">Hauteur par défaut
           <span class="unit"><input id="default-height" type="number" min="1" max="100" step="0.5" value="6"> m</span>
         </label>
       </div>
 
-      <label class="check"><input type="checkbox" name="layer" value="routes" checked> Routes (AQréseau+)</label>
+      <label class="check" data-tip="Réseau routier AQréseau+ (Adresses Québec), découpé à la zone. Chaque tronçon porte son nom, sa classe et une vitesse indicative (VIT_DEF) à valider."><input type="checkbox" name="layer" value="routes" checked> Routes (AQréseau+)</label>
       <div class="sub-opts">
-        <label class="check small"><input type="checkbox" id="traffic" checked> Débits MTMD (DJMA, % camions)</label>
+        <label class="check small" data-tip="Rattache aux tronçons les débits du MTMD (réseau supérieur seulement) : DJMA, DJME, DJMH, % camions, 30e heure. Les rues municipales restent sans débit."><input type="checkbox" id="traffic" checked> Débits MTMD (DJMA, % camions)</label>
       </div>
     </section>
 
     <section>
       <h2><span class="step">3</span> Projection</h2>
-      <select id="crs">
+      <select id="crs" data-tip="Système de coordonnées des shapefiles. MTM automatique choisit la zone MTM NAD83(CSRS) selon la longitude du centre de la zone. Choisir la même projection que le reste du projet CadnaA.">
         <option value="auto" selected>MTM automatique (NAD83 CSRS)</option>
         <option value="mtm3">MTM zone 3</option><option value="mtm4">MTM zone 4</option>
         <option value="mtm5">MTM zone 5</option><option value="mtm6">MTM zone 6</option>
@@ -90,11 +93,14 @@
     </section>
 
     <section>
-      <button id="go" type="button" class="primary" disabled>Générer le ZIP</button>
+      <h2><span class="step">4</span> Extraction et validation</h2>
+      <button id="go" type="button" class="primary" disabled data-tip="Télécharge et calcule toutes les couches, puis ouvre l'aperçu 3D. Aucun ZIP n'est encore créé.">Extraire et prévisualiser</button>
       <ol id="log"></ol>
       <div id="results" class="hidden">
-        <a id="download" class="primary" href="#">Télécharger le ZIP</a>
-        <button id="open-3d" type="button">Aperçu 3D (validation)</button>
+        <button id="open-3d" type="button" data-tip="Rouvre la vue 3D : terrain, bâtiments extrudés, routes, courbes. Vérifiez les hauteurs et les débits avant de générer le ZIP.">Aperçu 3D (validation)</button>
+        <p id="stale" class="info warn hidden">Zone ou options modifiées depuis l'extraction : relancez l'extraction pour les appliquer.</p>
+        <button id="make-zip" type="button" class="primary" data-tip="Écrit les shapefiles de l'extraction affichée et télécharge le ZIP.">Générer le ZIP</button>
+        <a id="download" class="hidden" href="#"></a>
       </div>
     </section>
 
@@ -107,25 +113,29 @@
     <div id="viewer-canvas"></div>
     <div id="viewer-bar">
       <span id="viewer-title"></span>
-      <button id="viewer-close" type="button" class="ghost" title="Fermer (Échap)">Fermer ✕</button>
+      <span class="bar-actions">
+        <button id="viewer-help" type="button" class="ghost" data-tip="Notice : lecture de l'aperçu 3D.">Notice</button>
+        <button id="viewer-zip" type="button" class="primary-inline" data-tip="Données validées : écrit les shapefiles et télécharge le ZIP.">Générer le ZIP</button>
+        <button id="viewer-close" type="button" class="ghost" data-tip="Retour à la carte (Échap).">Fermer ✕</button>
+      </span>
     </div>
     <div id="viewer-panel">
       <h3>Couches</h3>
-      <label class="check small"><input type="checkbox" id="v-terrain" checked> Terrain (MNT)</label>
-      <label class="check small"><input type="checkbox" id="v-buildings" checked> Bâtiments</label>
-      <label class="check small"><input type="checkbox" id="v-roads" checked> Routes</label>
-      <label class="check small"><input type="checkbox" id="v-contours"> Courbes de niveau</label>
-      <label class="check small"><input type="checkbox" id="v-zone" checked> Limite de zone</label>
-      <h3>Exagération du relief <span id="v-exag-val">×1</span></h3>
+      <label class="check small" data-tip="MNT allégé pour l'affichage (300 × 300 mailles au plus). Les courbes du ZIP utilisent la pleine résolution."><input type="checkbox" id="v-terrain" checked> Terrain (MNT)</label>
+      <label class="check small" data-tip="Emprises extrudées à leur valeur HAUTEUR. Cliquer un bâtiment pour voir ses attributs."><input type="checkbox" id="v-buildings" checked> Bâtiments</label>
+      <label class="check small" data-tip="Tronçons AQréseau+ drapés sur le terrain."><input type="checkbox" id="v-roads" checked> Routes</label>
+      <label class="check small" data-tip="Courbes à leur altitude réelle. Sur les grandes zones, une partie seulement est affichée (indiqué dans la barre du haut)."><input type="checkbox" id="v-contours"> Courbes de niveau</label>
+      <label class="check small" data-tip="Contour de la zone d'étude dessinée."><input type="checkbox" id="v-zone" checked> Limite de zone</label>
+      <h3 data-tip="Multiplie les altitudes du terrain pour rendre le relief lisible. Affichage seulement : les données ne changent pas.">Exagération du relief <span id="v-exag-val">×1</span></h3>
       <input type="range" id="v-exag" min="1" max="5" step="0.5" value="1">
       <p class="hint" style="margin-top:2px">Les hauteurs des bâtiments restent à l'échelle réelle.</p>
-      <h3>Couleur des bâtiments</h3>
+      <h3 data-tip="Source de la hauteur : repérer les bâtiments sans LiDAR (OSM ou défaut) à vérifier. Hauteur : repérer les valeurs aberrantes.">Couleur des bâtiments</h3>
       <select id="v-mode">
         <option value="source" selected>Source de la hauteur</option>
         <option value="height">Hauteur</option>
       </select>
       <div id="viewer-legend"></div>
-      <h3>Couleur des routes</h3>
+      <h3 data-tip="Classe AQréseau+, ou DJMA MTMD (gris : pas de débit rattaché).">Couleur des routes</h3>
       <select id="v-road-mode">
         <option value="class" selected>Classe</option>
         <option value="djma">DJMA (MTMD)</option>
@@ -135,6 +145,185 @@
     </div>
     <div id="viewer-pick" class="hidden"></div>
   </div>
+
+  <dialog id="help" aria-labelledby="help-title">
+    <div class="help-head">
+      <h2 id="help-title">Notice d'utilisation</h2>
+      <button id="help-close" type="button" class="ghost">Fermer ✕</button>
+    </div>
+    <div class="help-body">
+      <nav class="help-toc">
+        <a href="#h-principe">Principe</a>
+        <a href="#h-zone">1. Zone d'étude</a>
+        <a href="#h-couches">2. Couches et options</a>
+        <a href="#h-projection">3. Projection</a>
+        <a href="#h-extraction">4. Extraction</a>
+        <a href="#h-apercu">5. Aperçu 3D</a>
+        <a href="#h-zip">6. ZIP</a>
+        <a href="#h-cadnaa">7. Import CadnaA</a>
+        <a href="#h-limites">Limites</a>
+        <a href="#h-sources">Sources</a>
+      </nav>
+      <article>
+        <section id="h-principe">
+          <h3>Principe</h3>
+          <p>L'outil prépare les données d'entrée d'un modèle acoustique CadnaA pour une zone du Québec :
+            topographie, bâtiments avec hauteurs, routes avec débits de circulation. Le travail se fait en deux temps :</p>
+          <ol>
+            <li><b>Extraire et prévisualiser</b> : les données sont téléchargées, calculées, puis affichées en 3D.</li>
+            <li><b>Générer le ZIP</b> : une fois les données validées, les shapefiles sont écrits et téléchargés.</li>
+          </ol>
+          <p class="tip-box">Survolez une option pour afficher une bulle d'aide.</p>
+        </section>
+
+        <section id="h-zone">
+          <h3>1. Zone d'étude</h3>
+          <ul>
+            <li><b>Rechercher</b> une adresse ou une ville pour centrer la carte (recherche limitée au Québec).</li>
+            <li><b>Rectangle</b> : cliquer un premier coin, puis le coin opposé.</li>
+            <li><b>Polygone</b> : cliquer chaque sommet, puis cliquer le premier point pour fermer.
+              Le contour ne doit pas se croiser.</li>
+            <li>Après le tracé, les sommets restent déplaçables à la souris. <b>Effacer</b> supprime la zone.</li>
+            <li>Le fond <b>Imagerie</b> (sélecteur en haut à droite de la carte) aide à caler la zone sur le terrain.</li>
+          </ul>
+          <p>La surface et la projection qui sera utilisée s'affichent sous les boutons.
+            Maximum : <b>100 km²</b>. Au-delà de 25 km², l'extraction prend plusieurs minutes.</p>
+          <p>Conseil : prévoir une marge autour des récepteurs et des sources. Les bâtiments et le relief
+            situés en bordure influencent la propagation.</p>
+        </section>
+
+        <section id="h-couches">
+          <h3>2. Couches et options</h3>
+          <h4>Topographie</h4>
+          <p>Courbes de niveau 3D calculées sur le MNT LiDAR <b>HRDEM 1 m</b> (RNCan), complété par le
+            <b>MRDEM 30 m</b> là où il n'y a pas de LiDAR. La couverture LiDAR s'affiche dans le journal d'extraction.</p>
+          <table>
+            <tr><th>Option</th><th>Effet</th><th>Conseil</th></tr>
+            <tr><td>Équidistance</td><td>Écart d'altitude entre deux courbes</td>
+              <td>0,5 à 1 m en milieu plat ou urbain ; 2 à 5 m en relief marqué</td></tr>
+            <tr><td>Résolution MNT</td><td>Taille des mailles du MNT</td>
+              <td>Auto : 1 m jusqu'à 4 km², 2 m jusqu'à 25 km², 5 m au-delà</td></tr>
+            <tr><td>Lissage</td><td>Filtre le bruit LiDAR (véhicules, végétation basse)</td>
+              <td>3 m par défaut ; 6 à 10 m pour des courbes plus simples</td></tr>
+            <tr><td>Grille ASCII</td><td>Ajoute <code>mnt.asc</code> (MNT non lissé)</td>
+              <td>Utile pour un contrôle dans un SIG</td></tr>
+          </table>
+          <h4>Bâtiments</h4>
+          <p>Emprises <b>OpenStreetMap</b>. Un bâtiment est gardé si son centre est dans la zone ; les emprises de moins de
+            5 m² sont écartées. La hauteur est choisie dans cet ordre de priorité :</p>
+          <ol>
+            <li><code>LIDAR</code> : médiane de (surface LiDAR − sol) sur l'emprise, entre 2 et 250 m ;</li>
+            <li><code>OSM_H</code> : tag <code>height</code> d'OpenStreetMap ;</li>
+            <li><code>OSM_NIV</code> : nombre d'étages × 3 m ;</li>
+            <li><code>DEFAUT</code> : la <b>hauteur par défaut</b> choisie (6 m ≈ deux étages).</li>
+          </ol>
+          <h4>Routes et débits</h4>
+          <p>Réseau <b>AQréseau+</b> (Adresses Québec) découpé à la zone. <code>VIT_DEF</code> est une vitesse
+            <b>indicative</b> déduite de la classe de route : à valider avec la signalisation réelle.</p>
+          <p>L'option <b>Débits MTMD</b> rattache les sections de trafic du ministère des Transports : DJMA (annuel),
+            DJME (été), DJMH (hiver), % camions, débit de la 30e heure. Seul le réseau supérieur (autoroutes, routes
+            nationales et régionales) a des débits ; les rues municipales restent à compléter.</p>
+        </section>
+
+        <section id="h-projection">
+          <h3>3. Projection</h3>
+          <p><b>MTM automatique</b> choisit la zone MTM NAD83(CSRS) (3 à 10) selon la longitude du centre de la zone.
+            On peut forcer une zone MTM ou le <b>Lambert Québec</b> (EPSG:32198). Choisir la projection du reste du
+            projet CadnaA : toutes les couches importées doivent être dans le même système.</p>
+        </section>
+
+        <section id="h-extraction">
+          <h3>4. Extraction</h3>
+          <p><b>Extraire et prévisualiser</b> lance le calcul. Le journal affiche les étapes et les comptes
+            (courbes, bâtiments, tronçons, débits rattachés). À la fin, l'aperçu 3D s'ouvre.</p>
+          <p>Si la zone ou une option change après l'extraction, un avertissement s'affiche : il faut relancer
+            l'extraction pour que le ZIP en tienne compte.</p>
+        </section>
+
+        <section id="h-apercu">
+          <h3>5. Aperçu 3D (validation)</h3>
+          <table>
+            <tr><th>Action</th><th>Commande</th></tr>
+            <tr><td>Rotation</td><td>Glisser avec le bouton gauche</td></tr>
+            <tr><td>Déplacement</td><td>Glisser avec le bouton droit</td></tr>
+            <tr><td>Zoom</td><td>Molette</td></tr>
+            <tr><td>Attributs d'un bâtiment</td><td>Clic sur le bâtiment</td></tr>
+            <tr><td>Fermer</td><td>Échap ou « Fermer »</td></tr>
+          </table>
+          <p>Points à vérifier :</p>
+          <ul>
+            <li><b>Couleur par source</b> : les bâtiments <code>DEFAUT</code> ou <code>OSM</code> n'ont pas de hauteur
+              LiDAR. Vérifier les plus importants (bâtiments proches des sources, écrans).</li>
+            <li><b>Couleur par hauteur</b> : repérer les valeurs aberrantes (arbres au-dessus d'un toit, bâtiment récent
+              absent du LiDAR).</li>
+            <li><b>Routes par DJMA</b> : en gris, les tronçons sans débit. S'assurer que les axes principaux ont un débit.</li>
+            <li><b>Exagération du relief</b> : rend visibles les talus et les buttes. Affichage seulement.</li>
+          </ul>
+          <p>Le terrain affiché est allégé (300 × 300 mailles au plus) ; les shapefiles gardent la pleine résolution.</p>
+        </section>
+
+        <section id="h-zip">
+          <h3>6. Contenu du ZIP</h3>
+          <p><b>Générer le ZIP</b> (sous l'aperçu ou dans la barre de la vue 3D) écrit les fichiers suivants :</p>
+          <table>
+            <tr><th>Fichier</th><th>Contenu</th></tr>
+            <tr><td><code>courbes_niveau.shp</code></td><td>Courbes 3D (Z = altitude), champ <code>ALTITUDE</code></td></tr>
+            <tr><td><code>batiments.shp</code></td><td><code>HAUTEUR</code> (m, relative au sol), <code>H_SRC</code>,
+              <code>H_LIDAR</code>, <code>H_OSM</code>, <code>NIVEAUX</code>, <code>ALT_SOL</code>, <code>TYPE</code>,
+              <code>NOM</code></td></tr>
+            <tr><td><code>routes.shp</code></td><td><code>NOM</code>, <code>CLASSE</code>, <code>VIT_DEF</code>, et avec
+              les débits : <code>DJMA</code>, <code>DJME</code>, <code>DJMH</code>, <code>PCT_CAM</code>, <code>H30</code>,
+              <code>NB_CHAUS</code>, <code>DJMA_CH</code>, <code>RECOUVR</code>…</td></tr>
+            <tr><td><code>sections_trafic_mtmd.shp</code></td><td>Sections MTMD brutes, pour contrôler le rattachement</td></tr>
+            <tr><td><code>zone_etude.shp</code></td><td>Contour de la zone</td></tr>
+            <tr><td><code>mnt.asc</code></td><td>MNT en grille (si l'option est cochée)</td></tr>
+            <tr><td><code>LISEZMOI.txt</code></td><td>Paramètres, statistiques, sources et licences</td></tr>
+          </table>
+          <p>Le <b>DJMA</b> est un total des deux sens. Quand deux chaussées séparées sont détectées
+            (<code>NB_CHAUS = 2</code>), <code>DJMA_CH</code> donne le débit par chaussée.
+            Les attributs sont encodés en CP1252 (accents lus par CadnaA).</p>
+        </section>
+
+        <section id="h-cadnaa">
+          <h3>7. Import dans CadnaA</h3>
+          <p><b>Fichier › Importer</b>, format <b>ArcView Shape (*.shp)</b>, un fichier à la fois. Dans les options
+            d'import, affecter le type d'objet et les attributs :</p>
+          <table>
+            <tr><th>Fichier</th><th>Type d'objet CadnaA</th><th>Attributs</th></tr>
+            <tr><td><code>courbes_niveau.shp</code></td><td>Courbe de niveau</td><td>Hauteur = coordonnée Z (ou <code>ALTITUDE</code>)</td></tr>
+            <tr><td><code>batiments.shp</code></td><td>Bâtiment</td><td>Hauteur = <code>HAUTEUR</code> (relative)</td></tr>
+            <tr><td><code>routes.shp</code></td><td>Route</td><td>Nom = <code>NOM</code> ; vitesse = <code>VIT_DEF</code> ;
+              DJMA = <code>DJMA_CH</code> ; % PL = <code>PCT_CAM</code></td></tr>
+            <tr><td><code>zone_etude.shp</code></td><td>Limite de calcul (facultatif)</td><td>–</td></tr>
+          </table>
+          <p>Importer la topographie en premier : CadnaA place ensuite les bâtiments et les routes sur le terrain.</p>
+        </section>
+
+        <section id="h-limites">
+          <h3>Limites</h3>
+          <ul>
+            <li>Les emprises OSM peuvent être incomplètes ou décalées ; vérifier sur l'imagerie.</li>
+            <li>Le LiDAR peut dater de plusieurs années : les bâtiments récents prennent alors une hauteur OSM ou par défaut.</li>
+            <li>Les débits MTMD ne couvrent pas les rues municipales ; utiliser des comptages locaux.</li>
+            <li>Voies ferrées, écrans antibruit et nature du sol ne sont pas encore extraits.</li>
+            <li>Les données sont indicatives : à vérifier avant toute étude réglementaire.</li>
+          </ul>
+        </section>
+
+        <section id="h-sources">
+          <h3>Sources et licences</h3>
+          <ul>
+            <li>Topographie : RNCan, HRDEM 1 m et MRDEM 30 m – Licence du gouvernement ouvert – Canada</li>
+            <li>Bâtiments : © contributeurs OpenStreetMap – ODbL 1.0</li>
+            <li>Routes : Adresses Québec, AQréseau+ – MRNF – CC-BY 4.0</li>
+            <li>Débits : Débit de circulation – MTMD – CC-BY 4.0</li>
+          </ul>
+        </section>
+      </article>
+    </div>
+  </dialog>
+
+  <div id="tip" role="tooltip" class="hidden"></div>
 
   <script type="importmap">
     { "imports": {

@@ -334,7 +334,7 @@ function bindControls() {
   };
   $("v-road-mode").onchange = (e) => { if (view) colorRoads(view, e.target.value); };
   $("viewer-close").onclick = closeViewer;
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && view) closeViewer(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && view && !$("help").open) closeViewer(); });
 }
 
 function closeViewer() {

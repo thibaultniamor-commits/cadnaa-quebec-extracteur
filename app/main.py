@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import crs, pipeline, preview
+from . import crs, pipeline
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT = ROOT.parent / "output"
@@ -22,6 +22,7 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 _executor = ThreadPoolExecutor(max_workers=2)
 _jobs: dict[str, dict] = {}
 _lock = threading.Lock()
+KEEP_EXTRACTIONS = 5  # extractions gardées en mémoire pour générer leur ZIP
 
 
 class ExtractRequest(BaseModel):
@@ -53,9 +54,13 @@ def extract(req: ExtractRequest):
     if not layers:
         raise HTTPException(400, "Aucune couche sélectionnée.")
     job_id = uuid.uuid4().hex[:12]
-    job = {"status": "en_cours", "messages": [], "summary": None, "error": None, "file": None}
+    job = {"status": "en_cours", "messages": [], "summary": None, "error": None, "extraction": None,
+           "preview": None, "file": None, "lock": threading.Lock()}
     with _lock:
         _jobs[job_id] = job
+        # Libère la mémoire des extractions les plus anciennes.
+        for old in list(_jobs.values())[:-KEEP_EXTRACTIONS]:
+            old["extraction"] = None
     opts = pipeline.Options(**{**req.model_dump(), "layers": layers})
     _executor.submit(_run, job, opts)
     return {"job_id": job_id}
@@ -63,8 +68,8 @@ def extract(req: ExtractRequest):
 
 def _run(job, opts):
     try:
-        path, summary = pipeline.run(opts, OUTPUT, progress=job["messages"].append)
-        job.update(status="termine", summary=summary, file=str(path))
+        ex = pipeline.extract(opts, OUTPUT, progress=job["messages"].append)
+        job.update(status="termine", summary=ex.summary, extraction=ex, preview=ex.preview_path)
     except ValueError as e:
         job.update(status="erreur", error=str(e))
     except Exception as e:  # noqa: BLE001 - l'erreur est remontée à l'interface
@@ -85,21 +90,35 @@ def status(job_id: str):
     return {k: job[k] for k in ("status", "messages", "summary", "error")}
 
 
-@app.get("/api/jobs/{job_id}/download")
-def download(job_id: str):
+def _done(job_id):
     job = _job(job_id)
     if job["status"] != "termine":
         raise HTTPException(409, "Extraction non terminée.")
-    path = Path(job["file"])
-    return FileResponse(path, media_type="application/zip", filename=path.name)
+    return job
+
+
+@app.post("/api/jobs/{job_id}/zip")
+def make_zip(job_id: str):
+    job = _done(job_id)
+    with job["lock"]:
+        if job["file"] is None:
+            if job["extraction"] is None:
+                raise HTTPException(410, "Extraction expirée : relancez l'extraction.")
+            job["file"] = pipeline.package(job["extraction"], OUTPUT)
+    return {"name": job["file"].name}
+
+
+@app.get("/api/jobs/{job_id}/download")
+def download(job_id: str):
+    job = _done(job_id)
+    if job["file"] is None:
+        raise HTTPException(409, "ZIP non généré.")
+    return FileResponse(job["file"], media_type="application/zip", filename=job["file"].name)
 
 
 @app.get("/api/jobs/{job_id}/preview")
 def preview_data(job_id: str):
-    job = _job(job_id)
-    if job["status"] != "termine":
-        raise HTTPException(409, "Extraction non terminée.")
-    path = preview.path_for(Path(job["file"]))
-    if not path.exists():
+    job = _done(job_id)
+    if not job["preview"].exists():
         raise HTTPException(404, "Aperçu indisponible.")
-    return FileResponse(path, media_type="application/json")
+    return FileResponse(job["preview"], media_type="application/json")

@@ -17,10 +17,6 @@ MAX_CELLS = 300          # côté max de la grille de terrain affichée
 MAX_CONTOUR_POINTS = 400_000
 
 
-def path_for(zip_path):
-    return zip_path.with_name(zip_path.stem + "_apercu.json")
-
-
 def _downsample(dtm, grid, factor):
     """Moyenne par blocs (NaN ignorés)."""
     h, w = (grid.height // factor) * factor, (grid.width // factor) * factor
