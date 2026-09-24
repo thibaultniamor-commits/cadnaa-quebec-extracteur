@@ -715,7 +715,11 @@
           <table>
             <tr><th>Fichier</th><th>Contenu</th></tr>
             <tr><td><code>courbes_niveau.shp</code></td><td>Courbes 3D (Z = altitude), champ <code>ALTITUDE</code></td></tr>
-            <tr><td><code>batiments.shp</code></td><td><code>HAUTEUR</code> (m, relative au sol), <code>H_SRC</code>,
+            <tr><td><code>bord_terrain.shp</code></td><td>Limite du terrain en 3D, altitude du terrain à chaque sommet. Le terrain
+              (courbes et bord) dépasse la zone d'au moins 20 m, et de 10 m autour des bâtiments gardés à cheval sur la
+              limite, pour qu'aucun ne repose sur le terrain retombé à 0 hors du modèle.</td></tr>
+            <tr><td><code>batiments.shp</code></td><td>Polygones 3D (Z = altitude du toit), <code>HAUTEUR</code> (m, relative au sol),
+              <code>ALT_TOIT</code> (= <code>ALT_SOL</code> + <code>HAUTEUR</code>), <code>H_SRC</code>,
               <code>H_LIDAR</code>, <code>H_OSM</code>, <code>NIVEAUX</code>, <code>ALT_SOL</code>, <code>TYPE</code>,
               <code>NOM</code>, <code>STATUT</code> ; provenance de l'emprise : <code>ID_BAT</code>,
               <code>EMP_SRC</code> (OSM | REFBATI), <code>EMP_ROLE</code> (PRINCIPAL | COMPLEMENT),
@@ -745,14 +749,20 @@
           <table>
             <tr><th>Fichier</th><th>Type d'objet CadnaA</th><th>Attributs</th></tr>
             <tr><td><code>courbes_niveau.shp</code></td><td>Courbe de niveau</td><td>Hauteur = coordonnée Z (ou <code>ALTITUDE</code>)</td></tr>
-            <tr><td><code>batiments.shp</code></td><td>Bâtiment</td><td>Hauteur = <code>HAUTEUR</code> (relative)</td></tr>
-            <tr><td><code>batiments_projetes.shp</code></td><td>Bâtiment (variante projet)</td><td>Hauteur = <code>HAUTEUR</code> (relative)</td></tr>
+            <tr><td><code>bord_terrain.shp</code></td><td>Courbe de niveau</td><td>Hauteur = coordonnée Z uniquement (l'altitude
+              varie le long de la ligne). Évite que le terrain retombe à 0 sur les bords de la zone.</td></tr>
+            <tr><td><code>batiments.shp</code></td><td>Bâtiment</td><td>Hauteur absolue = coordonnée Z (altitude du toit, <code>ALT_TOIT</code>) ;
+              ou <code>HAUTEUR</code> en mode relatif</td></tr>
+            <tr><td><code>batiments_projetes.shp</code></td><td>Bâtiment (variante projet)</td><td>Idem <code>batiments.shp</code></td></tr>
             <tr><td><code>routes.shp</code></td><td>Route</td><td>Nom = <code>NOM</code> ; vitesse = <code>VITESSE</code> (ou
               <code>VIT_DEF</code> sans l'option OSM) ; DJMA = <code>DJMA_CH</code> ; % PL = <code>PCT_CAM</code> ;
               largeur = <code>LARG_M</code> ; débits horaires = <code>Q_J</code> / <code>Q_S</code> / <code>Q_N</code></td></tr>
             <tr><td><code>zone_etude.shp</code></td><td>Limite de calcul (facultatif)</td><td>–</td></tr>
           </table>
-          <p>Importer la topographie en premier : CadnaA place ensuite les bâtiments et les routes sur le terrain.</p>
+          <p>Importer la topographie en premier : CadnaA place ensuite les bâtiments et les routes sur le terrain.
+            Les sommets des bâtiments portent l'altitude du toit : sans affectation d'attribut, CadnaA les lit comme
+            des hauteurs absolues et les bâtiments sont à la bonne altitude. En mode relatif (<code>HAUTEUR</code>),
+            le terrain doit être importé, sinon les bâtiments partent de Z = 0.</p>
         </section>
 
         <section id="h-limites">

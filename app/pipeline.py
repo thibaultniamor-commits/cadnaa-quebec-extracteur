@@ -7,7 +7,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
+import shapely
 from pyproj import Transformer
 from shapely.geometry import shape
 from shapely.ops import transform as shp_transform
@@ -40,6 +42,23 @@ class Options:
     profile: tuple = (75.0, 15.0, 10.0)  # % du DJMA en jour / soir / nuit
 
 
+TERRAIN_MARGIN_M = 100  # MNT lu au-delà de la zone : terrain sous les bâtiments qui débordent de la limite
+TERRAIN_PAD_M = 20      # le terrain exporté dépasse la zone d'au moins cette distance, et chaque bâtiment de 10 m
+
+
+def terrain_zone(zone, buildings=None):
+    """Emprise du terrain exporté : zone + marge + bâtiments gardés (à cheval sur la limite), sans trous.
+
+    CadnaA fait retomber le terrain à 0 au-delà des dernières courbes : tout objet doit être posé à l'intérieur.
+    """
+    parts = [zone.buffer(TERRAIN_PAD_M, join_style="mitre")]
+    if buildings is not None and len(buildings):
+        parts.append(buildings.geometry.buffer(10, join_style="mitre").union_all())
+    area = shapely.union_all(parts).intersection(zone.buffer(TERRAIN_MARGIN_M))
+    polys = [shapely.Polygon(p.exterior) for p in getattr(area, "geoms", [area]) if p.geom_type == "Polygon"]
+    return max(polys, key=lambda p: p.area).simplify(1.0) if polys else zone
+
+
 def auto_resolution(area_km2):
     if area_km2 <= 4:
         return 1.0
@@ -64,6 +83,7 @@ class Extraction:
     dtm: object = None
     grid: object = None
     contours: gpd.GeoDataFrame | None = None
+    edges: gpd.GeoDataFrame | None = None       # bord de la zone en 3D, altitude du terrain à chaque sommet
     buildings: gpd.GeoDataFrame | None = None
     roads: gpd.GeoDataFrame | None = None
     sections: gpd.GeoDataFrame | None = None
@@ -94,26 +114,24 @@ def extract(opts: Options, out_dir: Path, progress=lambda msg: None) -> Extracti
 
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    bbox_ll = zone_ll.buffer(0.001).bounds
+    bbox_ll = zone_ll.buffer(0.002).bounds  # ~150 m : couvre TERRAIN_MARGIN_M
     summary = {"zone_km2": round(area_km2, 3), "epsg": epsg, "crs": crs.name(epsg), "alt_ref": "CGVD2013"}
     ex = Extraction(opts, epsg, zone, summary, out_dir / f"cadnaa_qc_{stamp}_apercu.json")
 
     if "topo" in opts.layers:
         res = opts.dem_resolution or auto_resolution(area_km2)
-        grid = topo.Grid.covering(zone.buffer(3 * res + opts.smoothing_m * 3).bounds, res, f"EPSG:{epsg}")
+        pad = TERRAIN_MARGIN_M + 3 * res + opts.smoothing_m * 3
+        grid = topo.Grid.covering(zone.buffer(pad).bounds, res, f"EPSG:{epsg}")
         progress(f"Topographie : lecture du MNT à {res:g} m ({grid.width}×{grid.height} px)…")
         dtm, info = topo.build_dtm(bbox_ll, grid, opts.dem_source, progress)
         ex.dem_info = info
-        progress(f"Topographie : {_dem_sources(info)}, altitudes {info.datum}. Calcul des courbes…")
-        lines = topo.contours(dtm, grid, opts.contour_interval, zone, opts.smoothing_m)
-        ex.contours = gpd.GeoDataFrame({"ALTITUDE": [z for z, _ in lines]}, geometry=[g for _, g in lines])
+        progress(f"Topographie : {_dem_sources(info)}, altitudes {info.datum}.")
         ex.dtm, ex.grid = dtm, grid
         summary["alt_ref"] = info.datum
-        summary.update(courbes=len(ex.contours), mnt_resolution_m=res, couverture_lidar=round(info.lidar, 3),
+        summary.update(mnt_resolution_m=res, couverture_lidar=round(info.lidar, 3),
                        mnt_sources={k: round(v, 3) for k, v in info.parts.items() if v},
                        mnt_feuillets=info.feuillets, mnt_annees=info.annees, ecart_cgvd_m=info.offset,
                        equidistance_m=opts.contour_interval)
-        progress(f"Topographie : {len(ex.contours)} courbes de niveau.")
 
     if "batiments" in opts.layers:
         b, fp = _footprints(zone_ll, zone, epsg, opts.footprint_source, progress)
@@ -133,6 +151,16 @@ def extract(opts: Options, out_dir: Path, progress=lambda msg: None) -> Extracti
         counts = b["H_SRC"].value_counts().to_dict() if len(b) else {}
         summary.update(batiments=len(b), hauteurs=counts)
         progress(f"Bâtiments : {len(b)} — sources des hauteurs {counts}")
+
+    if ex.dtm is not None:
+        progress("Topographie : calcul des courbes de niveau…")
+        tz = terrain_zone(zone, ex.buildings)
+        lines = topo.contours(ex.dtm, ex.grid, opts.contour_interval, tz, opts.smoothing_m)
+        ex.contours = gpd.GeoDataFrame({"ALTITUDE": [z for z, _ in lines]}, geometry=[g for _, g in lines])
+        edges = topo.edge_lines(ex.dtm, ex.grid, tz, opts.smoothing_m)
+        ex.edges = gpd.GeoDataFrame({"TYPE": ["BORD_TERRAIN"] * len(edges)}, geometry=edges)
+        summary.update(courbes=len(ex.contours), marge_terrain_m=round(tz.hausdorff_distance(zone), 1))
+        progress(f"Topographie : {len(ex.contours)} courbes de niveau.")
 
     if "routes" in opts.layers:
         progress("Routes : interrogation AQréseau+" + (" et OpenStreetMap…" if opts.road_attrs else "…"))
@@ -277,26 +305,62 @@ def _buildings_out(ex: Extraction):
     return gpd.GeoDataFrame(merged, geometry="geometry", crs=b.crs), None
 
 
+def _buildings_3d(ex: Extraction, b):
+    """PolygonZ dont chaque sommet porte l'altitude du toit (ALT_SOL + HAUTEUR).
+
+    CadnaA lit la coordonnée Z d'un bâtiment comme une hauteur absolue : un polygone 2D (Z = 0)
+    enfouit le bâtiment sous le terrain. ALT_SOL manquant (hors LiDAR) : terrain médian sous l'emprise.
+    """
+    b = b.copy()
+    missing = b.ALT_SOL.isna().to_numpy()
+    if missing.any():
+        z, grid = (ex.dtm, ex.grid) if ex.dtm is not None else (ex.terrain or (None, None))
+        b.loc[missing, "ALT_SOL"] = [round(projets.ground_level(g, z, grid), 2) for g in b.geometry[missing]]
+    b["ALT_TOIT"] = np.round(b.ALT_SOL + b.HAUTEUR, 2)
+    roof = b.ALT_TOIT.fillna(b.HAUTEUR).to_numpy(dtype=float)  # sans terrain connu : Z = hauteur relative
+    b["geometry"] = shapely.force_3d(shapely.force_2d(b.geometry.to_numpy()), roof)
+    return b
+
+
+def _draped(ex: Extraction, gdf, step=10.0):
+    """Lignes et polygones posés sur le terrain : Z de chaque sommet = altitude du sol (sommets tous les `step` m).
+
+    Un shapefile 2D arrive dans CadnaA avec Z = 0, lu comme une altitude absolue.
+    """
+    z, grid = (ex.dtm, ex.grid) if ex.dtm is not None else (ex.terrain or (None, None))
+    if z is None or not np.isfinite(z).any():
+        return gdf
+    sample = preview.Sampler(z, grid)
+    geoms = shapely.segmentize(shapely.force_2d(gdf.geometry.to_numpy()), step)
+    gdf = gdf.copy()
+    xy = shapely.get_coordinates(geoms)
+    zs = np.round(sample(xy[:, 0], xy[:, 1]), 2)
+    gdf["geometry"] = shapely.set_coordinates(shapely.force_3d(geoms), np.column_stack([xy, zs]))
+    return gdf
+
+
 def package(ex: Extraction, out_dir: Path) -> Path:
     """Écrit les shapefiles de l'extraction et les regroupe dans un ZIP."""
     folder = out_dir / ex.preview_path.name.removesuffix("_apercu.json")
     folder.mkdir(parents=True, exist_ok=True)
     epsg, s = ex.epsg, ex.summary
-    _write(gpd.GeoDataFrame({"NOM": ["Zone d'étude"], "SURF_KM2": [s["zone_km2"]]}, geometry=[ex.zone]),
-           folder / "zone_etude.shp", epsg)
+    zone = gpd.GeoDataFrame({"NOM": ["Zone d'étude"], "SURF_KM2": [s["zone_km2"]]}, geometry=[ex.zone])
+    _write(_draped(ex, zone), folder / "zone_etude.shp", epsg)
     if ex.contours is not None:
         _write(ex.contours, folder / "courbes_niveau.shp", epsg)
+        if ex.edges is not None and len(ex.edges):
+            _write(ex.edges, folder / "bord_terrain.shp", epsg)
         if ex.opts.dem_grid:
             topo.write_ascii_grid(folder / "mnt.asc", ex.dtm, ex.grid)
     existing, projected = _buildings_out(ex)
     if existing is not None:
-        _write(existing, folder / "batiments.shp", epsg)
+        _write(_buildings_3d(ex, existing), folder / "batiments.shp", epsg)
     if projected is not None:
-        _write(projected, folder / "batiments_projetes.shp", epsg)
+        _write(_buildings_3d(ex, projected), folder / "batiments_projetes.shp", epsg)
     if ex.sections is not None and len(ex.sections):
         _write(ex.sections, folder / "sections_trafic_mtmd.shp", epsg)
     if ex.roads is not None:
-        _write(ex.roads, folder / "routes.shp", epsg)
+        _write(_draped(ex, ex.roads), folder / "routes.shp", epsg)
     (folder / "LISEZMOI.txt").write_text(_readme(ex.opts, s, ex), encoding="utf-8")
     zip_path = Path(shutil.make_archive(str(folder), "zip", folder))
     shutil.rmtree(folder, ignore_errors=True)
@@ -317,7 +381,7 @@ def _readme(opts, s, ex=None):
         f"Surface de la zone : {s['zone_km2']} km²",
         "",
         "FICHIERS",
-        "  zone_etude.shp      Polygone de la zone sélectionnée",
+        "  zone_etude.shp      Polygone de la zone sélectionnée (3D : Z = altitude du terrain)",
     ]
     if "courbes" in s:
         lines += [
@@ -327,6 +391,13 @@ def _readme(opts, s, ex=None):
             if ex is not None and ex.dem_info is not None else
             f"                      MNT {s['mnt_resolution_m']} m, couverture LiDAR {s['couverture_lidar']:.0%}",
             *_readme_dem(ex),
+        ]
+        lines += [
+            "                      Courbes et bord tracés sur la zone élargie d'au moins 20 m, et jusqu'à 10 m au-delà de",
+            f"                      tout bâtiment à cheval sur la limite (marge maximale {s.get('marge_terrain_m')} m) :",
+            "                      aucun bâtiment ne repose sur le terrain retombé à 0 hors du modèle.",
+            "  bord_terrain.shp    Limite du terrain en 3D (PolylineZ) : chaque sommet porte l'altitude du terrain",
+            "                      (tous les 5 m environ). Ferme le modèle de terrain le long des bords.",
         ]
         if opts.dem_grid:
             lines.append("  mnt.asc             MNT en grille ESRI ASCII (même projection)")
@@ -340,6 +411,8 @@ def _readme(opts, s, ex=None):
             "                      OSM_ID, TYPE, NOM, NIVEAUX, H_OSM : attributs OSM (reportés sur l'emprise du",
             "                        Référentiel quand un même bâtiment OSM la recouvre à 50 % ou plus) ;",
             f"                      ALT_SOL : altitude du sol (m, {s['alt_ref']})",
+            "                      ALT_TOIT : altitude du toit = ALT_SOL + HAUTEUR (m) ; polygones 3D (PolygonZ) dont",
+            "                        la coordonnée Z porte ALT_TOIT",
             f"                      Répartition des sources : {s.get('hauteurs')}",
             "                      STATUT  : EXISTANT | DEMOLI (bâtiment existant à retirer dans l'état projeté)",
         ]
@@ -370,10 +443,14 @@ def _readme(opts, s, ex=None):
         "  Fichier > Importer, format ArcView Shape (*.shp), un fichier à la fois.",
         "  Dans les options d'import, affecter le type d'objet et les attributs :",
         "    courbes_niveau.shp -> Courbe de niveau ; hauteur = coordonnée Z (ou attribut ALTITUDE)",
-        "    batiments.shp      -> Bâtiment ; hauteur = HAUTEUR (relative)",
-        "    batiments_projetes.shp -> Bâtiment ; hauteur = HAUTEUR (relative) ; à placer dans une variante",
+        "    bord_terrain.shp   -> Courbe de niveau ; hauteur = coordonnée Z (surtout pas un attribut : l'altitude",
+        "                          varie le long de la ligne). Sans elle, CadnaA fait retomber le terrain à 0 aux bords.",
+        "    batiments.shp      -> Bâtiment ; la coordonnée Z donne l'altitude absolue du toit (ALT_TOIT) ;",
+        "                          ou bien hauteur = HAUTEUR en mode relatif (le terrain doit alors être importé)",
+        "    batiments_projetes.shp -> Bâtiment ; idem ; à placer dans une variante",
         "    routes.shp         -> Route ; nom = NOM ; vitesse = " + ("VITESSE" if "routes_vit_osm" in s else "VIT_DEF")
         + " (à vérifier) ; DTV/DJMA = DJMA_CH ; % PL = PCT_CAM",
+        "                          les sommets portent l'altitude du terrain (Z, tous les 10 m) : routes posées au sol",
         *(["                          largeur = LARG_M ; débits horaires jour / soir / nuit = Q_J / Q_S / Q_N"]
           if "profil" in s else []),
         "    zone_etude.shp     -> Limite de calcul (facultatif)",

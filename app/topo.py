@@ -10,6 +10,7 @@ from pathlib import Path
 
 import contourpy
 import numpy as np
+import shapely
 import rasterio
 from affine import Affine
 from rasterio.enums import Resampling
@@ -305,16 +306,43 @@ def _lines(geom):
     return []
 
 
+def smoothed(dtm, grid: Grid, smoothing_m=3.0):
+    """MNT lissé (gaussien) dont sont tirées les courbes ; les trous restent NaN."""
+    valid = np.isfinite(dtm)
+    sigma = smoothing_m / grid.res
+    if sigma <= 0 or not valid.any():
+        return dtm
+    z = gaussian_filter(np.where(valid, dtm, np.nanmean(dtm)), sigma)
+    z[~valid] = np.nan
+    return z
+
+
+def edge_lines(dtm, grid: Grid, zone, smoothing_m=3.0, step=None):
+    """Contour de la zone en LineString Z dont chaque sommet porte l'altitude du terrain (tous les `step` m).
+
+    Ferme le modèle de terrain de CadnaA : sans elle, le terrain retombe à 0 au-delà des dernières courbes.
+    """
+    from .preview import Sampler
+    z = smoothed(dtm, grid, smoothing_m)
+    if not np.isfinite(z).any():
+        return []
+    sample = Sampler(z, grid)
+    step = step or max(5.0, 2 * grid.res)
+    rings = [p.exterior for p in getattr(zone, "geoms", [zone])]
+    out = []
+    for ring in rings:
+        dense = shapely.segmentize(LineString(ring.coords), step)
+        xy = np.asarray(dense.coords)[:, :2]
+        zs = np.round(sample(xy[:, 0], xy[:, 1]), 2)
+        out.append(LineString(np.column_stack([xy, zs])))
+    return out
+
+
 def contours(dtm, grid: Grid, interval, zone, smoothing_m=3.0):
     """Courbes de niveau 3D (LineString Z) découpées sur la zone. Retourne [(altitude, ligne)]."""
-    valid = np.isfinite(dtm)
-    if not valid.any():
+    if not np.isfinite(dtm).any():
         return []
-    z = dtm
-    sigma = smoothing_m / grid.res
-    if sigma > 0:
-        z = gaussian_filter(np.where(valid, dtm, np.nanmean(dtm)), sigma)
-        z[~valid] = np.nan
+    z = smoothed(dtm, grid, smoothing_m)
 
     # contourpy attend des coordonnées croissantes : on retourne l'axe Y.
     gen = contourpy.contour_generator(grid.x_centers(), grid.y_centers()[::-1], np.ma.masked_invalid(z[::-1]),
