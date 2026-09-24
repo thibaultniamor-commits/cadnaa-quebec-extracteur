@@ -76,7 +76,7 @@ L'éditeur affiche côte à côte le plan importé et la carte (imagerie + empri
 | `courbes_niveau.shp` | PolylineZ (Z = altitude) | `ALTITUDE` |
 | `batiments.shp` | Polygone | `HAUTEUR` (m, relative), `H_SRC`, `H_LIDAR`, `H_OSM`, `NIVEAUX`, `ALT_SOL`, `TYPE`, `NOM`, `STATUT` |
 | `batiments_projetes.shp` (si saisis) | Polygone | `HAUTEUR`, `NIVEAUX`, `ALT_SOL`, `NOM`, `H_SRC` = `PROJET`, `STATUT` = `PROJETE`, `PLAN` |
-| `routes.shp` | Polyligne | `NOM`, `NO_RTE`, `CLASSE`, `CLS_AQ`, `CARACT`, `GESTION`, `VIT_DEF`, `LONG_M`, et avec l'option débits : `DJMA`, `DJME`, `DJMH`, `PCT_CAM`, `H30`, `AN_DJMA`, `NB_CHAUS`, `DJMA_CH`, `SECT_MTMD`, `DJMA_SRC`, `RECOUVR` |
+| `routes.shp` | Polyligne | `NOM`, `NO_RTE`, `CLASSE`, `CLS_AQ`, `CARACT`, `GESTION`, `VIT_DEF`, `LONG_M`, et avec l'option débits : `DJMA`, `DJME`, `DJMH`, `PCT_CAM`, `H30`, `AN_DJMA`, `NB_CHAUS`, `DJMA_CH`, `SECT_MTMD`, `DJMA_SRC`, `RECOUVR`, `Q_J`, `Q_S`, `Q_N` ; avec l'option OSM : `VITESSE`, `VIT_SRC`, `VOIES`, `VOIES_SRC`, `LARG_M`, `LARG_SRC`, `SENS_UNIQ`, `REVET`, `REVET_OSM`, `OSM_RTE`, `OSM_HWY` |
 | `sections_trafic_mtmd.shp` | Polyligne | Sections de trafic MTMD brutes (`DJMA`, `DJME`, `DJMH`, `PCT_CAM`, `H30`, `DEBUT`, `FIN`), pour contrôle |
 | `zone_etude.shp` | Polygone | `SURF_KM2` |
 | `mnt.asc` (option) | Grille ESRI ASCII | – |
@@ -94,6 +94,7 @@ ou Lambert Québec (EPSG:32198). Encodage des attributs : CP1252 (fichier `.cpg`
 | Routes | **AQréseau+** (Adresses Québec, MRNF) | ArcGIS REST `servicescarto.mrnf.gouv.qc.ca` |
 | Carte : dalles LiDAR | Index des feuillets 1/20 000 du **MNT LiDAR 1 m** (MRNF, Forêt ouverte) + année d'acquisition ; relief ombré LiDAR | `URL_Lidar.geojson` + `Metadonnees.zip` (`diffusion.mffp.gouv.qc.ca`), WMS `geoegl.msp.gouv.qc.ca/ws/mffpecofor.fcgi` |
 | Débits | **Débit de circulation** (MTMD) : DJMA, DJME, DJMH, % camions, 30e heure (année la plus récente disponible) | WFS `ws.mapserver.transports.gouv.qc.ca` (`ms:circulation_routier`) |
+| Vitesses, voies, revêtement | **OpenStreetMap** : `maxspeed`, `lanes`, `width`, `oneway`, `surface` | Overpass |
 
 Licences : Licence du gouvernement ouvert – Canada (RNCan), ODbL (OSM), CC-BY 4.0 (Adresses Québec, MTMD, MRNF).
 
@@ -121,9 +122,27 @@ Le DJMA est un **total deux sens**. Si la longueur rattachée vaut environ 2 foi
 chaussées sont détectées (`NB_CHAUS = 2`) et `DJMA_CH` = DJMA / 2 donne le débit par chaussée. `RECOUVR` indique
 la qualité géométrique du rattachement.
 
+Le **profil J / S / N** (75 / 15 / 10 % par défaut, modifiable) répartit le DJMA sur les périodes jour
+(7-19 h), soir (19-23 h) et nuit (23-7 h) : `Q_J`, `Q_S`, `Q_N` = `DJMA_CH` × part / durée de la période (véh/h).
+
+### Vitesses, voies et revêtement OpenStreetMap
+
+Chaque tronçon AQréseau+ reçoit les attributs du chemin OSM parallèle qui le recouvre le plus (au moins 60 %
+du tronçon dans un couloir de 12 m, et parallèle au chemin : les rues transversales sont écartées).
+
+- `VITESSE` : `maxspeed` OSM (`VIT_SRC = OSM`) ; sinon la vitesse OSM qui domine sur la même rue de même
+  classe (`OSM_RUE`) ; sinon `VIT_DEF` (`DEFAUT`). En ville, une route « Nationale » est souvent à 50 km/h
+  et non aux 90 km/h de `VIT_DEF`, d'où ce report par rue.
+- `VOIES` : `lanes` OSM, sinon 2 (1 en sens unique) ; `LARG_M` : `width` OSM, sinon voies × 3,5 m (3,7 m sur autoroute).
+- `SENS_UNIQ` : 1 pour un sens unique ou une chaussée d'autoroute ; `REVET` : `ENROBE`, `BETON`, `PAVES`,
+  `TRAIT_SURF`, `NON_REVETU`, `AUTRE` ou `INCONNU` (valeur OSM brute dans `REVET_OSM`).
+
+L'aperçu 3D colore les routes par vitesse (en gris : valeur par défaut à vérifier).
+
 ## Limites connues
 
-- `VIT_DEF` est une vitesse **indicative** déduite de la classe de route.
+- `VIT_DEF` est une vitesse **indicative** déduite de la classe de route ; les vitesses OSM peuvent manquer ou dater (zones scolaires, limites temporaires) : vérifier la signalisation sur les axes importants.
+- Le profil jour / soir / nuit est un profil type, à remplacer par des comptages horaires.
 - Les débits MTMD couvrent le réseau sous gestion du ministère (autoroutes, nationales et régionales hors milieu urbain, quelques artères). Les rues municipales n'ont pas de DJMA : à compléter avec les comptages des villes.
 - Les hauteurs LiDAR datent du relevé : un bâtiment construit après le relevé prend la hauteur OSM ou la valeur par défaut (voir `H_SRC`).
 - À la limite entre LiDAR 1 m et MRDEM 30 m, le terrain peut présenter une marche.
@@ -147,6 +166,7 @@ app/
   buildings.py  Bâtiments OSM + hauteurs LiDAR
   roads.py      Routes AQréseau+
   traffic.py    Débits MTMD (DJMA…) et rattachement aux routes
+  osmroads.py   Vitesses, voies, largeur, revêtement OSM rattachés aux routes
   crs.py        Projections MTM / Lambert
   preview.py    Données de l'aperçu 3D (JSON)
   plans.py      Lecture des plans importés (PDF rendu en image, DXF en polylignes)

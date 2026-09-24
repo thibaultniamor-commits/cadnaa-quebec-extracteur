@@ -137,6 +137,8 @@ function requestBody() {
     traffic: $("traffic").checked,
     dem_source: $("dem-source").value,
     footprint_source: $("footprint-source").value,
+    road_attrs: $("road-attrs").checked,
+    profile: ["p-jour", "p-soir", "p-nuit"].map((id) => Number($(id).value) || 0),
   };
 }
 
@@ -158,6 +160,11 @@ $("go").onclick = async () => {
   if (!zone) return;
   const body = requestBody();
   if (!body.layers.length) { log("Sélectionnez au moins une couche.", "err"); return; }
+  const total = body.profile.reduce((a, b) => a + b, 0);
+  if (body.traffic && Math.abs(total - 100) > 0.5) {
+    log(`Profil jour / soir / nuit : le total fait ${total} %, il doit faire 100 %.`, "err");
+    return;
+  }
   job = null;
   $("log").innerHTML = "";
   $("results").classList.add("hidden");
@@ -236,7 +243,15 @@ function renderProvenance(s) {
   if (s.sections_mtmd !== undefined) {
     rows.push(["Débits", `MTMD · DJMA sur ${s.routes_djma} tronçon(s) ; les autres sont sans débit (à compléter)`]);
   }
-  rows.push(["Vitesses", "indicatives selon la classe (VIT_DEF), à valider", "muted"]);
+  if (s.routes_vit_osm !== undefined) {
+    rows.push(["Vitesses", `OpenStreetMap sur ${pct(s.routes_vit_osm)} du linéaire ; le reste : vitesse indicative `
+      + "de la classe (VIT_SRC = DEFAUT), à valider", s.routes_vit_osm < 0.5 ? "warn" : ""]);
+    rows.push(["Voies, revêtement", `OpenStreetMap : voies sur ${pct(s.routes_voies_osm)}, revêtement sur `
+      + `${pct(s.routes_revet_osm)} du linéaire ; ailleurs valeurs par défaut`]);
+    if (s.routes_osm_indisponible) rows.push(["Attention", "OpenStreetMap indisponible : valeurs par défaut partout", "warn"]);
+  } else if (s.routes !== undefined) {
+    rows.push(["Vitesses", "indicatives selon la classe (VIT_DEF), à valider", "muted"]);
+  }
   $("provenance").innerHTML = `<div class="prov-head"><b>Provenance de cette extraction</b>
       <a href="#" id="prov-more">Détails et liens officiels</a></div>
     <dl>${rows.map(([k, v, c]) => `<dt>${k}</dt><dd class="${c || ""}">${escHtml(v)}</dd>`).join("")}</dl>`;

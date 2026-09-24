@@ -56,6 +56,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .sub-opts label:not(.check) { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .sub-opts select { min-width: 90px; }
 .unit input { width: 70px; }
+.unit.profile input { width: 54px; margin-left: 3px; }
 #crs { width: 100%; }
 
 .info { font-size: 13px; }

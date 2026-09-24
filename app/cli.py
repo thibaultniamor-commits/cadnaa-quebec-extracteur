@@ -24,12 +24,16 @@ def main():
                    help="MNT LiDAR : Forêt ouverte (MRNF, CGVD28) ou HRDEM (RNCan, CGVD2013)")
     p.add_argument("--footprints", default="auto", choices=("auto", "osm", "refbati"),
                    help="Emprises : priorité automatique par maille, OSM seul ou Référentiel québécois seul")
+    p.add_argument("--no-road-attrs", action="store_true",
+                   help="Ne pas rattacher vitesses, voies et revêtements OpenStreetMap")
+    p.add_argument("--profile", nargs=3, type=float, default=(75.0, 15.0, 10.0), metavar=("JOUR", "SOIR", "NUIT"),
+                   help="Part du DJMA (%%) en jour 7-19 h, soir 19-23 h, nuit 23-7 h")
     p.add_argument("--out", default="output")
     a = p.parse_args()
     opts = Options(geometry=mapping(box(*a.bbox)), layers=a.layers, contour_interval=a.interval,
                    dem_resolution=a.resolution, default_height=a.default_height, crs=a.crs, dem_grid=a.dem_grid,
                    traffic=not a.no_traffic, dem_source=a.dem_source,
-                   footprint_source=a.footprints)
+                   footprint_source=a.footprints, road_attrs=not a.no_road_attrs, profile=tuple(a.profile))
     zip_path, summary = run(opts, Path(a.out), progress=print)
     print(zip_path)
     print(json.dumps(summary, ensure_ascii=False, indent=2))

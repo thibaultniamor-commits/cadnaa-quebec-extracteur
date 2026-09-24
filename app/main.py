@@ -13,7 +13,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from . import calage, crs, foretouverte, pipeline, plans
 
@@ -53,6 +53,15 @@ class ExtractRequest(BaseModel):
     traffic: bool = True
     dem_source: Literal["foretouverte", "hrdem"] = "foretouverte"
     footprint_source: Literal["auto", "osm", "refbati"] = "auto"
+    road_attrs: bool = True
+    profile: tuple[float, float, float] = (75.0, 15.0, 10.0)  # % du DJMA en jour / soir / nuit
+
+    @field_validator("profile")
+    @classmethod
+    def _profile_total(cls, v):
+        if min(v) < 0 or abs(sum(v) - 100) > 0.5:
+            raise ValueError("Les parts jour / soir / nuit doivent être positives et totaliser 100 %.")
+        return v
 
 
 @app.get("/")

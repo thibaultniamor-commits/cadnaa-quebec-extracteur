@@ -37,9 +37,15 @@ const DJMA_CLASSES = [
   [5000, "#fbb4b9", "5 000 – 20 000"], [0, "#feebe2", "< 5 000"],
 ];
 const DJMA_NONE = "#9aa0a8";
+const SPEED_CLASSES = [
+  [90, "#b2182b", "90 km/h et plus"], [70, "#ef8a62", "70 – 80"], [50, "#f4c542", "50 – 60"],
+  [0, "#67a9cf", "moins de 50"],
+];
 const roadColor = {
   class: (r) => ROAD_COLORS[r.k] || ROAD_DEFAULT,
   djma: (r) => (r.d === null || r.d === undefined ? DJMA_NONE : DJMA_CLASSES.find(([min]) => r.d >= min)[1]),
+  speed: (r) => (r.vs === "DEFAUT" || r.v === null || r.v === undefined ? DJMA_NONE
+    : SPEED_CLASSES.find(([min]) => r.v >= min)[1]),
 };
 const CONTOUR_COLOR = "#8a5a2b";
 const ZONE_COLOR = "#1f5fae";
@@ -302,6 +308,10 @@ function colorRoads(state, mode) {
     const n = roads.userData.items.filter((r) => r.d !== null && r.d !== undefined).length;
     el.innerHTML = DJMA_CLASSES.map(([, col, label]) => `<div><i style="background:${col}"></i>${label} véh/j</div>`).join("")
       + `<div><i style="background:${DJMA_NONE}"></i>Sans donnée <span class="muted">(${roads.userData.items.length - n})</span></div>`;
+  } else if (mode === "speed") {
+    const n = roads.userData.items.filter((r) => r.vs === "DEFAUT").length;
+    el.innerHTML = SPEED_CLASSES.map(([, col, label]) => `<div><i style="background:${col}"></i>${label}</div>`).join("")
+      + `<div><i style="background:${DJMA_NONE}"></i>Défaut de la classe, à vérifier <span class="muted">(${n})</span></div>`;
   } else {
     el.innerHTML = Object.entries(ROAD_COLORS).map(([k, col]) => `<div><i style="background:${col}"></i>${k}</div>`).join("")
       + `<div><i style="background:${ROAD_DEFAULT}"></i>Autres</div>`;

@@ -12,12 +12,15 @@ from pyproj import Transformer
 from shapely.geometry import shape
 from shapely.ops import transform as shp_transform
 
-from . import buildings, crs, preview, projets, roads, topo, traffic
+from . import buildings, crs, osmroads, preview, projets, roads, topo, traffic
 
 MAX_AREA_KM2 = 100.0
 ENCODING = "cp1252"  # encodage Windows lu par CadnaA (accents français)
 
 LAYERS = ("topo", "batiments", "routes")
+
+# Périodes d'évaluation (Lden) : jour 7 h-19 h, soir 19 h-23 h, nuit 23 h-7 h.
+PERIODS = (("J", "jour", 12), ("S", "soir", 4), ("N", "nuit", 8))
 
 
 @dataclass
@@ -33,6 +36,8 @@ class Options:
     traffic: bool = True  # débits MTMD rattachés aux routes
     dem_source: str = "foretouverte"  # foretouverte (MRNF, CGVD28) | hrdem (RNCan, CGVD2013)
     footprint_source: str = "auto"  # auto (priorité par maille) | osm | refbati
+    road_attrs: bool = True  # vitesse, voies, largeur, revêtement OSM rattachés aux routes
+    profile: tuple = (75.0, 15.0, 10.0)  # % du DJMA en jour / soir / nuit
 
 
 def auto_resolution(area_km2):
@@ -130,7 +135,10 @@ def extract(opts: Options, out_dir: Path, progress=lambda msg: None) -> Extracti
         progress(f"Bâtiments : {len(b)} — sources des hauteurs {counts}")
 
     if "routes" in opts.layers:
-        progress("Routes : interrogation AQréseau+…")
+        progress("Routes : interrogation AQréseau+" + (" et OpenStreetMap…" if opts.road_attrs else "…"))
+        pool = ThreadPoolExecutor(1)
+        osm_ways = pool.submit(osmroads.fetch, zone_ll) if opts.road_attrs else None
+        pool.shutdown(wait=False)
         r = roads.clip(roads.fetch(zone_ll).to_crs(epsg), zone)
         summary.update(routes=len(r), routes_km=round(float(r.geometry.length.sum()) / 1000, 2))
         progress(f"Routes : {len(r)} tronçons ({summary['routes_km']} km).")
@@ -144,6 +152,10 @@ def extract(opts: Options, out_dir: Path, progress=lambda msg: None) -> Extracti
                            routes_djma_km=round(float(r.geometry[with_djma].length.sum()) / 1000, 2))
             progress(f"Débits : {len(sections)} sections MTMD, DJMA rattaché à {summary['routes_djma']} tronçons "
                      f"({summary['routes_djma_km']} km).")
+            r = _hourly_flows(r, opts.profile)
+            summary["profil"] = dict(zip((name for _, name, _ in PERIODS), opts.profile))
+        if opts.road_attrs:
+            r = _road_attrs(r, osm_ways, epsg, summary, progress)
         ex.roads = r
 
     progress("Aperçu 3D : préparation…")
@@ -154,6 +166,34 @@ def extract(opts: Options, out_dir: Path, progress=lambda msg: None) -> Extracti
     summary["duree_s"] = round(time.time() - t0, 1)
     progress(f"Extraction terminée en {summary['duree_s']} s.")
     return ex
+
+
+def _road_attrs(r, osm_ways, epsg, summary, progress):
+    """Vitesse, voies, largeur, sens unique et revêtement OSM ; valeurs par défaut si OSM est indisponible."""
+    progress("Routes : rattachement des vitesses affichées, voies et revêtements OpenStreetMap…")
+    try:
+        ways = osm_ways.result().to_crs(epsg)
+    except Exception as e:  # noqa: BLE001 - les valeurs par défaut restent utilisables
+        progress(f"Routes : OpenStreetMap indisponible ({type(e).__name__}) ; vitesses et voies par défaut.")
+        ways = osmroads.fetch_empty().to_crs(epsg)
+        summary["routes_osm_indisponible"] = True
+    r = osmroads.attach(r, ways)
+    km = r.geometry.length / 1000
+    share = (lambda mask: round(float(km[mask].sum() / km.sum()), 3) if km.sum() else 0.0)
+    summary.update(routes_vit_osm=share(r.VIT_SRC != "DEFAUT"), routes_voies_osm=share(r.VOIES_SRC == "OSM"),
+                   routes_revet_osm=share(r.REVET != "INCONNU"))
+    progress(f"Routes : vitesse OSM sur {summary['routes_vit_osm']:.0%} du linéaire (rue comprise), voies sur "
+             f"{summary['routes_voies_osm']:.0%}, revêtement sur {summary['routes_revet_osm']:.0%} ; "
+             "le reste prend les valeurs par défaut de la classe.")
+    return r
+
+
+def _hourly_flows(r, profile):
+    """Débits horaires moyens par période (véh/h, par chaussée) : DJMA_CH x part de la période / durée."""
+    r = r.copy()
+    for (code, _, hours), pct in zip(PERIODS, profile):
+        r[f"Q_{code}"] = (r.DJMA_CH * pct / 100 / hours).round(0)
+    return r
 
 
 FOOTPRINT_NAMES = {"OSM": "OpenStreetMap", "REFBATI": "Référentiel québécois sur les bâtiments"}
@@ -309,6 +349,7 @@ def _readme(opts, s, ex=None):
             f"  routes.shp          {s['routes']} tronçons ({s['routes_km']} km, polylignes)",
             "                      NOM, NO_RTE, CLASSE (classe AQréseau+), CLS_AQ, CARACT, GESTION, LONG_M",
             "                      VIT_DEF : vitesse INDICATIVE selon la classe - à valider",
+            *_readme_road_attrs(s),
         ]
         if "sections_mtmd" in s:
             lines += [
@@ -320,6 +361,7 @@ def _readme(opts, s, ex=None):
                 "                        à utiliser si chaque chaussée est une source distincte dans CadnaA)",
                 "                      SECT_MTMD : n° de section ; RECOUVR : % du tronçon dans le couloir de la section",
                 "                      Tronçons sans DJMA : réseau municipal non couvert par le MTMD (à compléter).",
+                *_readme_profile(s),
                 f"  sections_trafic_mtmd.shp  {s['sections_mtmd']} sections de trafic MTMD brutes (contrôle du rattachement)",
             ]
     lines += [
@@ -330,7 +372,10 @@ def _readme(opts, s, ex=None):
         "    courbes_niveau.shp -> Courbe de niveau ; hauteur = coordonnée Z (ou attribut ALTITUDE)",
         "    batiments.shp      -> Bâtiment ; hauteur = HAUTEUR (relative)",
         "    batiments_projetes.shp -> Bâtiment ; hauteur = HAUTEUR (relative) ; à placer dans une variante",
-        "    routes.shp         -> Route ; nom = NOM ; vitesse = VIT_DEF (à vérifier) ; DTV/DJMA = DJMA_CH ; % PL = PCT_CAM",
+        "    routes.shp         -> Route ; nom = NOM ; vitesse = " + ("VITESSE" if "routes_vit_osm" in s else "VIT_DEF")
+        + " (à vérifier) ; DTV/DJMA = DJMA_CH ; % PL = PCT_CAM",
+        *(["                          largeur = LARG_M ; débits horaires jour / soir / nuit = Q_J / Q_S / Q_N"]
+          if "profil" in s else []),
         "    zone_etude.shp     -> Limite de calcul (facultatif)",
         "",
         "SOURCES ET LICENCES",
@@ -341,9 +386,42 @@ def _readme(opts, s, ex=None):
         "                hauteurs dérivées du HRDEM (RNCan) - Licence du gouvernement ouvert - Canada",
         "  Routes      : Adresses Québec / AQréseau+ - MRNF, gouvernement du Québec - CC-BY 4.0",
         "  Débits      : Débit de circulation - ministère des Transports et de la Mobilité durable - CC-BY 4.0",
+        *(["  Vitesses, voies, revêtements : © contributeurs OpenStreetMap - ODbL 1.0"] if "routes_vit_osm" in s else []),
         "  Les données sont fournies à titre indicatif : vérifier avant toute étude réglementaire.",
     ]
     return "\r\n".join(lines) + "\r\n"
+
+
+def _readme_road_attrs(s):
+    if "routes_vit_osm" not in s:
+        return []
+    out = [
+        "                      Attributs OpenStreetMap rattachés au chemin OSM parallèle le plus proche (OSM_RTE, OSM_HWY) :",
+        "                      VITESSE : vitesse retenue (km/h) - VIT_SRC : OSM (maxspeed du tronçon) | OSM_RUE (maxspeed",
+        "                        dominant de la même rue) | DEFAUT (= VIT_DEF) ; "
+        f"vitesse OSM sur {s['routes_vit_osm']:.0%} du linéaire",
+        "                      VOIES : nombre de voies (sur la chaussée dessinée) - VOIES_SRC : OSM | DEFAUT (2, ou 1 en sens",
+        f"                        unique) ; nombre OSM sur {s['routes_voies_osm']:.0%} du linéaire",
+        "                      LARG_M : largeur de chaussée (m) - LARG_SRC : OSM (tag width) | VOIES (voies x 3,5 m,",
+        "                        3,7 m sur autoroute)",
+        "                      SENS_UNIQ : 1 = sens unique (ou chaussée d'autoroute) ; REVET : ENROBE | BETON | PAVES |",
+        "                        TRAIT_SURF | NON_REVETU | AUTRE | INCONNU (REVET_OSM : valeur brute) ; "
+        f"connu sur {s['routes_revet_osm']:.0%} du linéaire",
+    ]
+    if s.get("routes_osm_indisponible"):
+        out.append("                      ATTENTION OpenStreetMap indisponible lors de l'extraction : valeurs par défaut partout")
+    return out
+
+
+def _readme_profile(s):
+    if "profil" not in s:
+        return []
+    pj, ps, pn = (s["profil"][name] for _, name, _ in PERIODS)
+    return [
+        "                      Q_J / Q_S / Q_N : débit horaire moyen par chaussée (véh/h) en jour 7-19 h / soir 19-23 h /",
+        f"                        nuit 23-7 h = DJMA_CH x part de la période / durée ; parts retenues {pj:g} / {ps:g} / {pn:g} %",
+        "                        (profil type À VALIDER avec des comptages horaires)",
+    ]
 
 
 SOURCE_NAMES = {"FORET_OUVERTE": "LiDAR Forêt ouverte (MRNF)", "HRDEM": "LiDAR HRDEM (RNCan)",

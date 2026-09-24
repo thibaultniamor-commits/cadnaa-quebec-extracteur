@@ -137,8 +137,10 @@ def build(zone, dtm_grid, buildings=None, roads=None, contours=None, stats=None)
 
     if roads is not None:
         djma = roads["DJMA"] if "DJMA" in roads else [None] * len(roads)
-        out["roads"] = [{"c": f.draped(g, 0.4), "k": k, "n": n, "d": _num(d, 0)}
-                        for g, k, n, d in zip(roads.geometry, roads.CLASSE, roads.NOM, djma)]
+        speed = roads["VITESSE"] if "VITESSE" in roads else roads["VIT_DEF"]
+        speed_src = roads["VIT_SRC"] if "VIT_SRC" in roads else ["DEFAUT"] * len(roads)
+        out["roads"] = [{"c": f.draped(g, 0.4), "k": k, "n": n, "d": _num(d, 0), "v": _num(v, 0), "vs": vs}
+                        for g, k, n, d, v, vs in zip(roads.geometry, roads.CLASSE, roads.NOM, djma, speed, speed_src)]
 
     if contours is not None and len(contours):
         levels = sorted(contours.ALTITUDE.unique())

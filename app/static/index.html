@@ -90,9 +90,13 @@
         </label>
       </div>
 
-      <label class="check" data-tip="Réseau routier AQréseau+ (Adresses Québec), découpé à la zone. Chaque tronçon porte son nom, sa classe et une vitesse indicative (VIT_DEF) à valider."><input type="checkbox" name="layer" value="routes" checked> Routes (AQréseau+)</label>
+      <label class="check" data-tip="Réseau routier AQréseau+ (Adresses Québec), découpé à la zone. Chaque tronçon porte son nom, sa classe et une vitesse indicative (VIT_DEF) selon la classe."><input type="checkbox" name="layer" value="routes" checked> Routes (AQréseau+)</label>
       <div class="sub-opts">
         <label class="check small" data-tip="Rattache aux tronçons les débits du MTMD (réseau supérieur seulement) : DJMA, DJME, DJMH, % camions, 30e heure. Les rues municipales restent sans débit."><input type="checkbox" id="traffic" checked> Débits MTMD (DJMA, % camions)</label>
+        <label data-tip="Répartition du DJMA entre jour (7-19 h), soir (19-23 h) et nuit (23-7 h), pour calculer les débits horaires Q_J, Q_S, Q_N. Total = 100 %. Profil type à valider avec des comptages horaires.">Profil J / S / N
+          <span class="unit profile"><input id="p-jour" type="number" min="0" max="100" step="1" value="75"><input id="p-soir" type="number" min="0" max="100" step="1" value="15"><input id="p-nuit" type="number" min="0" max="100" step="1" value="10"> %</span>
+        </label>
+        <label class="check small" data-tip="Rattache à chaque tronçon le chemin OpenStreetMap parallèle : vitesse affichée (maxspeed), nombre de voies, largeur, sens unique, revêtement. Sans donnée OSM : vitesse de la même rue, sinon valeur par défaut de la classe (VIT_SRC, VOIES_SRC le disent)."><input type="checkbox" id="road-attrs" checked> Vitesses, voies et revêtement (OSM)</label>
       </div>
     </section>
 
@@ -175,10 +179,11 @@
         <option value="height">Hauteur</option>
       </select>
       <div id="viewer-legend"></div>
-      <h3 data-tip="Classe AQréseau+, ou DJMA MTMD (gris : pas de débit rattaché).">Couleur des routes</h3>
+      <h3 data-tip="Classe AQréseau+, DJMA MTMD (gris : pas de débit rattaché), ou vitesse retenue (gris : valeur par défaut de la classe, à vérifier).">Couleur des routes</h3>
       <select id="v-road-mode">
         <option value="class" selected>Classe</option>
         <option value="djma">DJMA (MTMD)</option>
+        <option value="speed">Vitesse</option>
       </select>
       <div id="viewer-road-legend"></div>
       <p class="hint">Glisser : rotation · Clic droit : déplacement · Molette : zoom · Clic sur un bâtiment : attributs</p>
@@ -295,7 +300,7 @@
             <b>au moment de l'extraction</b>, directement sur les serveurs de ces producteurs. Chaque objet du ZIP
             porte sa source dans un champ, et le <code>LISEZMOI.txt</code> résume les sources utilisées.
             L'outil ne complète jamais une donnée sans le signaler : une valeur de repli est toujours marquée
-            (<code>H_SRC = DEFAUT</code>, route sans <code>DJMA</code>, etc.).</p>
+            (<code>H_SRC = DEFAUT</code>, route sans <code>DJMA</code>, <code>VIT_SRC = DEFAUT</code>, etc.).</p>
 
           <h4>Vue d'ensemble</h4>
           <table class="prov-table">
@@ -318,17 +323,30 @@
             <tr><td>Altitude du sol sous les bâtiments</td>
               <td>MNT LiDAR HRDEM (RNCan), dans la référence altimétrique des courbes</td>
               <td>–</td><td><code>ALT_SOL</code></td></tr>
-            <tr><td>Routes</td>
-              <td><b>AQréseau+</b>, Adresses Québec (MRNF)</td><td>–</td>
+            <tr><td>Tracé et classe des routes</td>
+              <td><b>AQréseau+</b>, Adresses Québec (MRNF) : réseau routier officiel</td><td>–</td>
               <td><code>CLASSE</code>, <code>CLS_AQ</code>, <code>GESTION</code></td></tr>
             <tr><td>Débits de circulation</td>
               <td><b>Débit de circulation</b> du ministère des Transports (MTMD)</td>
               <td>Aucun : rue laissée sans débit, à compléter par des comptages</td>
               <td><code>DJMA_SRC</code> = MTMD, <code>AN_DJMA</code> (année), <code>SECT_MTMD</code>, <code>RECOUVR</code></td></tr>
-            <tr><td>Vitesses</td>
-              <td colspan="2"><b>Aucune source officielle</b> : valeur indicative donnée par l'outil selon la classe
-                de route</td>
-              <td><code>VIT_DEF</code>, <b>à valider</b> avec la signalisation</td></tr>
+            <tr><td>Limite de vitesse</td>
+              <td><b>OpenStreetMap</b> : vitesse affichée sur les panneaux, telle que saisie par les contributeurs</td>
+              <td>Vitesse OSM des autres tronçons de la même rue, sinon <b>valeur indicative de l'outil</b> selon la
+                classe de route</td>
+              <td><code>VIT_SRC</code> (OSM | OSM_RUE | DEFAUT) ; aperçu 3D « Vitesse » (gris = indicative)</td></tr>
+            <tr><td>Nombre de voies, largeur</td>
+              <td><b>OpenStreetMap</b></td>
+              <td><b>Hypothèse de l'outil</b> : 2 voies (1 en sens unique) ; largeur = voies × 3,5 m</td>
+              <td><code>VOIES_SRC</code>, <code>LARG_SRC</code></td></tr>
+            <tr><td>Sens unique, revêtement</td>
+              <td><b>OpenStreetMap</b></td>
+              <td>Double sens ; revêtement <code>INCONNU</code></td>
+              <td><code>SENS_UNIQ</code>, <code>REVET</code>, <code>REVET_OSM</code></td></tr>
+            <tr><td>Répartition jour / soir / nuit</td>
+              <td><b>Hypothèse de l'outil</b> (75 / 15 / 10 % par défaut), modifiable avant l'extraction</td>
+              <td>–</td>
+              <td><code>LISEZMOI.txt</code> : parts retenues</td></tr>
           </table>
 
           <h4>Relief</h4>
@@ -448,7 +466,57 @@
               % camions et 30e heure, par section du réseau supérieur. Chaque débit garde son année
               (<code>AN_DJMA</code>) et sa section d'origine (<code>SECT_MTMD</code>).
               <a href="https://www.donneesquebec.ca/recherche/dataset/debit-de-circulation" target="_blank" rel="noopener">Fiche Données Québec</a></li>
+            <li><b>OpenStreetMap</b> : limite de vitesse, nombre de voies, largeur, sens unique et revêtement.
+              Il n'existe pas de données ouvertes officielles qui les donnent pour tout le Québec (certaines villes
+              publient leurs limites de vitesse, que l'outil n'utilise pas encore) : OpenStreetMap est la seule
+              source qui les couvre largement.
+              <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">Droits d'auteur et licence</a></li>
           </ul>
+          <p><b>Comment chaque information est obtenue</b> (option « Vitesses, voies et revêtement ») :</p>
+          <table>
+            <tr><th>Information</th><th>1<sup>er</sup> choix</th><th>2<sup>e</sup> choix</th><th>En dernier recours</th></tr>
+            <tr><td>Limite de vitesse (<code>VITESSE</code>)</td>
+              <td>Vitesse saisie dans OSM pour ce tronçon <span class="muted">(<code>VIT_SRC = OSM</code>)</span></td>
+              <td>Vitesse la plus fréquente sur le reste de la même rue <span class="muted">(<code>OSM_RUE</code>)</span></td>
+              <td>Valeur indicative selon la classe : autoroute 100, nationale et régionale 90, collectrice 70,
+                locale 50 km/h, bretelles 50 à 70 km/h <span class="muted">(<code>DEFAUT</code>)</span></td></tr>
+            <tr><td>Nombre de voies (<code>VOIES</code>)</td>
+              <td>Nombre saisi dans OSM</td><td>–</td>
+              <td>2 voies, ou 1 si la rue est à sens unique</td></tr>
+            <tr><td>Largeur (<code>LARG_M</code>)</td>
+              <td>Largeur saisie dans OSM (rare)</td><td>–</td>
+              <td>Nombre de voies × 3,5 m (3,7 m sur autoroute)</td></tr>
+            <tr><td>Sens unique (<code>SENS_UNIQ</code>)</td>
+              <td>Indication OSM ; les chaussées d'autoroute sont toujours à sens unique</td><td>–</td>
+              <td>Double sens</td></tr>
+            <tr><td>Revêtement (<code>REVET</code>)</td>
+              <td>Revêtement saisi dans OSM : enrobé, béton, pavés, traitement de surface, non revêtu</td><td>–</td>
+              <td><code>INCONNU</code></td></tr>
+          </table>
+          <details class="prov-more">
+            <summary><b>Comment une route AQréseau+ reçoit-elle les informations d'OpenStreetMap ?</b></summary>
+            <p>Les deux réseaux routiers sont dessinés séparément : leurs tracés ne se superposent pas exactement.
+              Pour chaque tronçon AQréseau+, l'outil cherche la route OSM qui <b>longe</b> ce tronçon : au moins 60 %
+              du tronçon doit se trouver à moins de 12 m d'elle, dans la même direction. Une rue qui ne fait que
+              croiser le tronçon est écartée. Le numéro de la route OSM retenue est gardé dans <code>OSM_RTE</code>
+              (<code>w123</code> = chemin 123).</p>
+            <p><b>Fiabilité.</b> Les limites de vitesse d'OSM sont saisies par des contributeurs d'après les panneaux.
+              Elles sont en général justes sur les grands axes et dans les villes actives, mais peuvent manquer,
+              dater d'un changement de limite, ou ignorer une zone scolaire ou une limite temporaire. Relevé fait à
+              Québec (septembre 2026) : la vitesse venait d'OSM sur 52 à 83 % du linéaire selon le secteur,
+              le reste prenant la valeur indicative.</p>
+            <p><b>Pourquoi reprendre la vitesse du reste de la rue ?</b> Les valeurs indicatives par classe sont
+              souvent trop élevées en ville : une route « nationale » qui traverse un centre urbain est en général
+              limitée à 50 km/h, pas à 90. La vitesse saisie ailleurs sur la même rue est plus vraisemblable.</p>
+            <p><b>Vérifier une route précise</b> : ouvrir <code>openstreetmap.org/way/&lt;numéro&gt;</code> avec le
+              numéro du champ <code>OSM_RTE</code>. La page montre toutes les informations saisies et, avec
+              <code>/history</code> à la fin de l'adresse, qui les a modifiées et quand.</p>
+          </details>
+          <p><b>Répartition jour / soir / nuit.</b> Le ministère publie un débit <b>journalier</b> (DJMA). Pour le
+            répartir entre le jour (7-19 h), le soir (19-23 h) et la nuit (23-7 h), l'outil applique un
+            <b>profil type</b> que vous choisissez (75 / 15 / 10 % par défaut). Ce n'est pas une donnée mesurée : à
+            remplacer par des comptages horaires quand il y en a. Les débits horaires qui en résultent sont
+            <code>Q_J</code>, <code>Q_S</code> et <code>Q_N</code>.</p>
 
           <h4>Affichage seulement (pas dans le ZIP)</h4>
           <p>Le fond de plan OpenStreetMap, l'imagerie Esri et le relief ombré LiDAR servent au repérage à l'écran.
@@ -459,7 +527,8 @@
             <li>Après l'extraction, l'encadré <b>Provenance de cette extraction</b> du panneau résume les sources
               réellement utilisées sur votre zone.</li>
             <li>Dans l'aperçu 3D, la <b>couleur des bâtiments</b> par source de la hauteur ou de l'emprise montre
-              ce qui est mesuré et ce qui est estimé. Un clic sur un bâtiment affiche sa fiche.</li>
+              ce qui est mesuré et ce qui est estimé. Un clic sur un bâtiment affiche sa fiche. La
+              <b>couleur des routes</b> par vitesse montre en gris les vitesses indicatives, à vérifier.</li>
             <li>Le <code>LISEZMOI.txt</code> du ZIP garde la trace complète : sources, parts, années, versions, règles.</li>
           </ol>
         </section>
@@ -534,10 +603,19 @@
           </ol>
           <h4>Routes et débits</h4>
           <p>Réseau <b>AQréseau+</b> (Adresses Québec) découpé à la zone. <code>VIT_DEF</code> est une vitesse
-            <b>indicative</b> déduite de la classe de route : à valider avec la signalisation réelle.</p>
+            <b>indicative</b> déduite de la classe de route.</p>
+          <p>L'option <b>Vitesses, voies et revêtement (OSM)</b> rattache à chaque tronçon le chemin OpenStreetMap
+            parallèle le plus proche. <code>VITESSE</code> est la vitesse retenue : le <code>maxspeed</code> OSM du
+            tronçon (<code>VIT_SRC = OSM</code>), sinon celui qui domine sur la même rue (<code>OSM_RUE</code>),
+            sinon <code>VIT_DEF</code> (<code>DEFAUT</code>, à vérifier). <code>VOIES</code>, <code>LARG_M</code>,
+            <code>SENS_UNIQ</code> et <code>REVET</code> suivent la même logique.</p>
           <p>L'option <b>Débits MTMD</b> rattache les sections de trafic du ministère des Transports : DJMA (annuel),
             DJME (été), DJMH (hiver), % camions, débit de la 30e heure. Seul le réseau supérieur (autoroutes, routes
             nationales et régionales) a des débits ; les rues municipales restent à compléter.</p>
+          <p>Le <b>profil J / S / N</b> répartit le DJMA sur les périodes jour (7-19 h), soir (19-23 h) et nuit
+            (23-7 h) : <code>Q_J</code>, <code>Q_S</code>, <code>Q_N</code> sont les débits horaires moyens par
+            chaussée. Le profil par défaut (75 / 15 / 10 %) est un profil type à remplacer par des comptages
+            horaires quand il y en a.</p>
         </section>
 
         <section id="h-projection">
@@ -572,6 +650,8 @@
             <li><b>Couleur par hauteur</b> : repérer les valeurs aberrantes (arbres au-dessus d'un toit, bâtiment récent
               absent du LiDAR).</li>
             <li><b>Routes par DJMA</b> : en gris, les tronçons sans débit. S'assurer que les axes principaux ont un débit.</li>
+            <li><b>Routes par vitesse</b> : en gris, les vitesses par défaut de la classe. Les vérifier en priorité
+              sur les axes qui dominent le bruit.</li>
             <li><b>Exagération du relief</b> : rend visibles les talus et les buttes. Affichage seulement.</li>
           </ul>
           <p>Le terrain affiché est allégé (300 × 300 mailles au plus) ; les shapefiles gardent la pleine résolution.</p>
@@ -642,7 +722,9 @@
               <code>EMP_PROD</code>, <code>EMP_DATE</code>, <code>EMP_NC</code>, <code>OSM_ID</code></td></tr>
             <tr><td><code>routes.shp</code></td><td><code>NOM</code>, <code>CLASSE</code>, <code>VIT_DEF</code>, et avec
               les débits : <code>DJMA</code>, <code>DJME</code>, <code>DJMH</code>, <code>PCT_CAM</code>, <code>H30</code>,
-              <code>NB_CHAUS</code>, <code>DJMA_CH</code>, <code>RECOUVR</code>…</td></tr>
+              <code>NB_CHAUS</code>, <code>DJMA_CH</code>, <code>RECOUVR</code>, <code>Q_J</code>, <code>Q_S</code>,
+              <code>Q_N</code>… ; avec OSM : <code>VITESSE</code>, <code>VIT_SRC</code>, <code>VOIES</code>,
+              <code>LARG_M</code>, <code>SENS_UNIQ</code>, <code>REVET</code>, <code>OSM_RTE</code>…</td></tr>
             <tr><td><code>batiments_projetes.shp</code></td><td>Bâtiments projetés (si saisis, sortie en fichier
               séparé) : <code>HAUTEUR</code>, <code>NIVEAUX</code>, <code>ALT_SOL</code>, <code>STATUT</code> = PROJETE,
               <code>PLAN</code></td></tr>
@@ -665,8 +747,9 @@
             <tr><td><code>courbes_niveau.shp</code></td><td>Courbe de niveau</td><td>Hauteur = coordonnée Z (ou <code>ALTITUDE</code>)</td></tr>
             <tr><td><code>batiments.shp</code></td><td>Bâtiment</td><td>Hauteur = <code>HAUTEUR</code> (relative)</td></tr>
             <tr><td><code>batiments_projetes.shp</code></td><td>Bâtiment (variante projet)</td><td>Hauteur = <code>HAUTEUR</code> (relative)</td></tr>
-            <tr><td><code>routes.shp</code></td><td>Route</td><td>Nom = <code>NOM</code> ; vitesse = <code>VIT_DEF</code> ;
-              DJMA = <code>DJMA_CH</code> ; % PL = <code>PCT_CAM</code></td></tr>
+            <tr><td><code>routes.shp</code></td><td>Route</td><td>Nom = <code>NOM</code> ; vitesse = <code>VITESSE</code> (ou
+              <code>VIT_DEF</code> sans l'option OSM) ; DJMA = <code>DJMA_CH</code> ; % PL = <code>PCT_CAM</code> ;
+              largeur = <code>LARG_M</code> ; débits horaires = <code>Q_J</code> / <code>Q_S</code> / <code>Q_N</code></td></tr>
             <tr><td><code>zone_etude.shp</code></td><td>Limite de calcul (facultatif)</td><td>–</td></tr>
           </table>
           <p>Importer la topographie en premier : CadnaA place ensuite les bâtiments et les routes sur le terrain.</p>
@@ -682,6 +765,8 @@
               l'ancien (doublon).</li>
             <li>Le LiDAR peut dater de plusieurs années : les bâtiments récents prennent alors une hauteur OSM ou par défaut.</li>
             <li>Les débits MTMD ne couvrent pas les rues municipales ; utiliser des comptages locaux.</li>
+            <li>Les vitesses OSM peuvent être absentes ou anciennes, et les zones scolaires ou limites temporaires
+              n'y figurent pas toujours ; vérifier la signalisation sur les axes importants.</li>
             <li>Voies ferrées, écrans antibruit et nature du sol ne sont pas encore extraits.</li>
             <li>Les données sont indicatives : à vérifier avant toute étude réglementaire.</li>
           </ul>
@@ -703,6 +788,7 @@
               <a href="https://ouvert.canada.ca/fr/licence-du-gouvernement-ouvert-canada" target="_blank" rel="noopener">Licence du gouvernement ouvert – Canada</a></li>
             <li>Routes : Adresses Québec, AQréseau+ – MRNF – CC-BY 4.0</li>
             <li>Débits : Débit de circulation – MTMD – CC-BY 4.0</li>
+            <li>Vitesses, voies, revêtements : © contributeurs OpenStreetMap – ODbL 1.0</li>
           </ul>
         </section>
       </article>
