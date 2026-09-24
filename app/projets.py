@@ -40,21 +40,22 @@ def build(items, epsg, z, grid):
         if geom is None or geom.area < MIN_AREA_M2:
             raise ValueError(f"Emprise invalide ou trop petite : « {it['nom']} ».")
         rows.append({
+            "ID_BAT": "", "EMP_SRC": "PROJET", "EMP_ROLE": "", "EMP_PROD": "", "EMP_DATE": "", "EMP_NC": "",
             "OSM_ID": "", "TYPE": "projet", "NOM": it["nom"][:100], "NIVEAUX": it.get("niveaux") or np.nan,
             "H_OSM": np.nan, "H_LIDAR": np.nan, "ALT_SOL": round(ground_level(geom, z, grid), 2),
             "HAUTEUR": round(float(it["hauteur"]), 1), "H_SRC": "PROJET", "STATUT": "PROJETE",
             "PLAN": (it.get("plan") or "")[:80], "PROJ_ID": it["id"], "geometry": geom,
         })
-    cols = ["OSM_ID", "TYPE", "NOM", "NIVEAUX", "H_OSM", "H_LIDAR", "ALT_SOL", "HAUTEUR", "H_SRC", "STATUT",
-            "PLAN", "PROJ_ID", "geometry"]
+    cols = ["ID_BAT", "EMP_SRC", "EMP_ROLE", "EMP_PROD", "EMP_DATE", "EMP_NC", "OSM_ID", "TYPE", "NOM", "NIVEAUX",
+            "H_OSM", "H_LIDAR", "ALT_SOL", "HAUTEUR", "H_SRC", "STATUT", "PLAN", "PROJ_ID", "geometry"]
     return gpd.GeoDataFrame(rows, columns=cols, geometry="geometry", crs=epsg)
 
 
 def covered(existing, projets):
-    """OSM_ID des bâtiments existants recouverts à plus de COVER_DEMOLI par une emprise projetée."""
+    """ID_BAT des bâtiments existants recouverts à plus de COVER_DEMOLI par une emprise projetée."""
     if existing is None or not len(existing) or not len(projets):
         return []
     union = projets.geometry.union_all()
     near = existing[existing.geometry.intersects(union)]
     part = near.geometry.intersection(union).area / near.geometry.area
-    return near.loc[part >= COVER_DEMOLI, "OSM_ID"].tolist()
+    return near.loc[part >= COVER_DEMOLI, "ID_BAT"].tolist()

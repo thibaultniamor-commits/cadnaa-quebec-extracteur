@@ -15,7 +15,10 @@
     <header>
       <div class="title-row">
         <h1>Extracteur CadnaA</h1>
-        <button id="open-help" type="button" class="ghost small-btn" data-tip="Notice d'utilisation détaillée : étapes, options, contenu du ZIP, import dans CadnaA.">Notice</button>
+        <span class="bar-actions">
+          <button id="open-sources" type="button" class="ghost small-btn" data-tip="D'où viennent les données : producteur officiel, ordre de priorité, liens vers les fiches, et comment le vérifier dans le ZIP.">Sources des données</button>
+          <button id="open-help" type="button" class="ghost small-btn" data-tip="Notice d'utilisation détaillée : étapes, options, contenu du ZIP, import dans CadnaA.">Notice</button>
+        </span>
       </div>
       <p class="sub">Topographie, bâtiments et routes — Québec</p>
     </header>
@@ -73,8 +76,15 @@
         <label class="check small" data-tip="Ajoute mnt.asc : le MNT non lissé en grille ESRI ASCII, dans la même projection. Utile pour un import en grille ou un contrôle dans un SIG."><input type="checkbox" id="dem-grid"> Joindre le MNT en grille ASCII (.asc)</label>
       </div>
 
-      <label class="check" data-tip="Emprises OpenStreetMap. Hauteur, par priorité : médiane LiDAR (surface − sol), sinon tag OSM height, sinon nombre d'étages × 3 m, sinon hauteur par défaut. Le champ H_SRC indique la source retenue."><input type="checkbox" name="layer" value="batiments" checked> Bâtiments (avec hauteurs)</label>
+      <label class="check" data-tip="Emprises OpenStreetMap et Référentiel québécois sur les bâtiments (MRNF), priorisées selon la zone. Hauteur, par priorité : médiane LiDAR (surface − sol), sinon tag OSM height, sinon nombre d'étages × 3 m, sinon hauteur par défaut. Les champs EMP_SRC et H_SRC indiquent les sources retenues."><input type="checkbox" name="layer" value="batiments" checked> Bâtiments (avec hauteurs)</label>
       <div class="sub-opts">
+        <label data-tip="Automatique : par maille de 500 m, OSM est la source principale s'il couvre au moins 85 % du bâti du Référentiel (tracés plus détaillés, mis à jour en continu), sinon le Référentiel (données gouvernementales validées, plus complètes hors des villes). L'autre source ajoute les bâtiments manquants, sans doublon.">Emprises
+          <select id="footprint-source">
+            <option value="auto" selected>Automatique (recommandé)</option>
+            <option value="osm">OpenStreetMap seul</option>
+            <option value="refbati">Référentiel québécois seul</option>
+          </select>
+        </label>
         <label data-tip="Hauteur donnée aux bâtiments sans LiDAR exploitable ni information OSM (H_SRC = DEFAUT). 6 m correspond environ à un bâtiment de deux étages.">Hauteur par défaut
           <span class="unit"><input id="default-height" type="number" min="1" max="100" step="0.5" value="6"> m</span>
         </label>
@@ -103,6 +113,7 @@
       <button id="go" type="button" class="primary" disabled data-tip="Télécharge et calcule toutes les couches, puis ouvre l'aperçu 3D. Aucun ZIP n'est encore créé.">Extraire et prévisualiser</button>
       <ol id="log"></ol>
       <div id="results" class="hidden">
+        <div id="provenance" class="prov"></div>
         <button id="open-3d" type="button" data-tip="Rouvre la vue 3D : terrain, bâtiments extrudés, routes, courbes. Vérifiez les hauteurs et les débits avant de générer le ZIP.">Aperçu 3D (validation)</button>
         <p id="stale" class="info warn hidden">Zone ou options modifiées depuis l'extraction : relancez l'extraction pour les appliquer.</p>
         <button id="make-zip" type="button" class="primary" data-tip="Écrit les shapefiles de l'extraction affichée et télécharge le ZIP.">Générer le ZIP</button>
@@ -131,7 +142,8 @@
     </section>
 
     <footer>
-      Sources : MRNF (LiDAR Forêt ouverte), RNCan (HRDEM/MRDEM), © OpenStreetMap (ODbL), Adresses Québec – MRNF (CC-BY 4.0)
+      Sources : MRNF (LiDAR Forêt ouverte, Référentiel québécois sur les bâtiments, AQréseau+), RNCan (HRDEM/MRDEM),
+      MTMD (débits), © OpenStreetMap (ODbL) — <a href="#" id="footer-sources">détail et liens</a>
     </footer>
   </aside>
 
@@ -156,9 +168,10 @@
       <h3 data-tip="Multiplie les altitudes du terrain pour rendre le relief lisible. Affichage seulement : les données ne changent pas.">Exagération du relief <span id="v-exag-val">×1</span></h3>
       <input type="range" id="v-exag" min="1" max="5" step="0.5" value="1">
       <p class="hint" style="margin-top:2px">Les hauteurs des bâtiments restent à l'échelle réelle.</p>
-      <h3 data-tip="Source de la hauteur : repérer les bâtiments sans LiDAR (OSM ou défaut) à vérifier. Hauteur : repérer les valeurs aberrantes.">Couleur des bâtiments</h3>
+      <h3 data-tip="Source de la hauteur : repérer les bâtiments sans LiDAR (OSM ou défaut) à vérifier. Source de l'emprise : voir où OSM ou le Référentiel a été retenu, et les bâtiments ajoutés en complément. Hauteur : repérer les valeurs aberrantes.">Couleur des bâtiments</h3>
       <select id="v-mode">
         <option value="source" selected>Source de la hauteur</option>
+        <option value="footprint">Source de l'emprise</option>
         <option value="height">Hauteur</option>
       </select>
       <div id="viewer-legend"></div>
@@ -251,6 +264,7 @@
     <div class="help-body">
       <nav class="help-toc">
         <a href="#h-principe">Principe</a>
+        <a href="#h-provenance"><b>Provenance des données</b></a>
         <a href="#h-zone">1. Zone d'étude</a>
         <a href="#h-couches">2. Couches et options</a>
         <a href="#h-projection">3. Projection</a>
@@ -260,7 +274,7 @@
         <a href="#h-zip">6. ZIP</a>
         <a href="#h-cadnaa">7. Import CadnaA</a>
         <a href="#h-limites">Limites</a>
-        <a href="#h-sources">Sources</a>
+        <a href="#h-sources">Licences</a>
       </nav>
       <article>
         <section id="h-principe">
@@ -272,6 +286,144 @@
             <li><b>Générer le ZIP</b> : une fois les données validées, les shapefiles sont écrits et téléchargés.</li>
           </ol>
           <p class="tip-box">Survolez une option pour afficher une bulle d'aide.</p>
+        </section>
+
+        <section id="h-provenance">
+          <h3>Provenance des données</h3>
+          <p class="tip-box"><b>En bref.</b> Toutes les données viennent de <b>producteurs publics officiels</b>
+            (gouvernement du Québec, gouvernement du Canada) ou d'<b>OpenStreetMap</b>. Elles sont téléchargées
+            <b>au moment de l'extraction</b>, directement sur les serveurs de ces producteurs. Chaque objet du ZIP
+            porte sa source dans un champ, et le <code>LISEZMOI.txt</code> résume les sources utilisées.
+            L'outil ne complète jamais une donnée sans le signaler : une valeur de repli est toujours marquée
+            (<code>H_SRC = DEFAUT</code>, route sans <code>DJMA</code>, etc.).</p>
+
+          <h4>Vue d'ensemble</h4>
+          <table class="prov-table">
+            <tr><th>Donnée</th><th>Source retenue en priorité</th><th>Si elle manque</th><th>Où le vérifier</th></tr>
+            <tr><td>Relief<br><span class="muted">courbes de niveau</span></td>
+              <td>LiDAR 1 m du <b>MRNF</b> (Forêt ouverte)</td>
+              <td>LiDAR HRDEM 1 m de <b>RNCan</b>, puis MRDEM 30 m (RNCan)</td>
+              <td><code>LISEZMOI.txt</code> : part de chaque source, feuillets, années d'acquisition</td></tr>
+            <tr><td>Emprises des bâtiments</td>
+              <td><b>OpenStreetMap</b> ou <b>Référentiel québécois sur les bâtiments</b> (MRNF), selon le secteur
+                (règle ci-dessous)</td>
+              <td>L'autre source ajoute les bâtiments manquants</td>
+              <td><code>EMP_SRC</code>, <code>EMP_ROLE</code>, <code>EMP_PROD</code>, <code>EMP_DATE</code> ;
+                aperçu 3D « Source de l'emprise »</td></tr>
+            <tr><td>Hauteur des bâtiments</td>
+              <td>LiDAR HRDEM de <b>RNCan</b> : surface − sol, médiane sur l'emprise</td>
+              <td>Hauteur saisie dans OSM, puis étages OSM × 3 m, puis hauteur par défaut</td>
+              <td><code>H_SRC</code>, <code>H_LIDAR</code>, <code>H_OSM</code>, <code>NIVEAUX</code> ;
+                aperçu 3D « Source de la hauteur »</td></tr>
+            <tr><td>Altitude du sol sous les bâtiments</td>
+              <td>MNT LiDAR HRDEM (RNCan), dans la référence altimétrique des courbes</td>
+              <td>–</td><td><code>ALT_SOL</code></td></tr>
+            <tr><td>Routes</td>
+              <td><b>AQréseau+</b>, Adresses Québec (MRNF)</td><td>–</td>
+              <td><code>CLASSE</code>, <code>CLS_AQ</code>, <code>GESTION</code></td></tr>
+            <tr><td>Débits de circulation</td>
+              <td><b>Débit de circulation</b> du ministère des Transports (MTMD)</td>
+              <td>Aucun : rue laissée sans débit, à compléter par des comptages</td>
+              <td><code>DJMA_SRC</code> = MTMD, <code>AN_DJMA</code> (année), <code>SECT_MTMD</code>, <code>RECOUVR</code></td></tr>
+            <tr><td>Vitesses</td>
+              <td colspan="2"><b>Aucune source officielle</b> : valeur indicative donnée par l'outil selon la classe
+                de route</td>
+              <td><code>VIT_DEF</code>, <b>à valider</b> avec la signalisation</td></tr>
+          </table>
+
+          <h4>Relief</h4>
+          <ul>
+            <li><b>Lidar – Modèles numériques</b>, ministère des Ressources naturelles et des Forêts (MRNF) :
+              MNT 1 m par feuillet 1/20 000, altitudes CGVD28. Les feuillets et leur année d'acquisition sont
+              affichés sur la carte ; si plusieurs se chevauchent, le plus récent l'emporte.
+              <a href="https://www.donneesquebec.ca/recherche/dataset/produits-derives-de-base-du-lidar" target="_blank" rel="noopener">Fiche Données Québec</a> ·
+              <a href="https://www.foretouverte.gouv.qc.ca/" target="_blank" rel="noopener">Forêt ouverte</a></li>
+            <li><b>HRDEM</b>, mosaïque LiDAR 1 m de Ressources naturelles Canada (série CanÉlévation), altitudes
+              CGVD2013. Comble les trous du LiDAR du MRNF, après un décalage égal à l'écart médian mesuré entre
+              les deux sur la zone. Pas de marche aux raccords.
+              <a href="https://ouvert.canada.ca/data/fr/dataset/0fe65119-e96e-4a57-8bfe-9d9245fba06b" target="_blank" rel="noopener">Fiche Gouvernement ouvert</a></li>
+            <li><b>MRDEM 30 m</b>, RNCan : uniquement là où aucun LiDAR n'existe (part indiquée dans le LISEZMOI).
+              <a href="https://ouvert.canada.ca/data/fr/dataset/18752265-bda3-498c-a4ba-9dfe68cb98da" target="_blank" rel="noopener">Fiche Gouvernement ouvert</a></li>
+          </ul>
+
+          <h4>Emprises des bâtiments : deux sources comparées sur place</h4>
+          <ul>
+            <li><b>OpenStreetMap</b> : carte collaborative mondiale. Les bâtiments y sont tracés à la main par des
+              contributeurs ou importés de données municipales, et mis à jour en continu. Les tracés sont fins
+              (un bâtiment par adresse), mais la complétude varie beaucoup d'un secteur à l'autre.
+              <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">Droits d'auteur et licence</a></li>
+            <li><b>Référentiel québécois sur les bâtiments</b> : couche officielle du MRNF, produite avec le Centre
+              de recherche en données et intelligence géospatiales de l'Université Laval, des municipalités
+              (Montréal, Québec, Laval, Longueuil…) et RNCan. Les géométries sont produites par intelligence
+              artificielle, extraction automatique, numérisation ou photogrammétrie. Le niveau de complétude
+              NC-1 signifie <b>validé manuellement</b>. Couverture continue de tout le territoire, mais la date
+              de la donnée source varie selon le secteur (de 2011 à 2023 dans les secteurs testés), et les bâtiments mitoyens
+              sont parfois réunis en un seul bloc.
+              <a href="https://www.donneesquebec.ca/recherche/dataset/referentiel_bati" target="_blank" rel="noopener">Fiche Données Québec</a> ·
+              <a href="https://diffusion.mern.gouv.qc.ca/diffusion/RGQ/Vectoriel/Theme/Local/ReferentielBati/Document/ListeAttributs_RefBati.pdf" target="_blank" rel="noopener">Liste des attributs (PDF)</a></li>
+          </ul>
+          <p><b>Règle de priorité</b> (option <b>Emprises : Automatique</b>). La zone est découpée en mailles de
+            500 m. Dans chaque maille, l'outil mesure la part de la surface bâtie du Référentiel que recouvrent les
+            emprises OSM :</p>
+          <ul>
+            <li><b>85 % ou plus</b> : OSM est complet dans ce secteur. Il devient la <b>source principale</b>, car ses
+              tracés sont plus détaillés et plus récents.</li>
+            <li><b>Moins de 85 %</b> : des bâtiments manquent dans OSM. Le <b>Référentiel</b> devient la source
+              principale.</li>
+            <li>Ensuite, l'autre source <b>complète</b> : elle ajoute les bâtiments absents de la source principale
+              (annexes, constructions récentes). Une emprise déjà recouverte à 20 % ou plus par un bâtiment retenu
+              est considérée comme un doublon et écartée ; un léger chevauchement est découpé.</li>
+            <li>Une emprise du Référentiel qui correspond au même bâtiment OSM (recouvrement mutuel d'au moins 50 %)
+              reçoit ses attributs OSM : type, nom, étages, hauteur saisie.</li>
+          </ul>
+          <p>Pourquoi cette règle : des essais sur plusieurs secteurs montrent qu'aucune source n'est la meilleure
+            partout.</p>
+          <table>
+            <tr><th>Secteur testé</th><th>Constat</th><th>Source principale retenue</th></tr>
+            <tr><td>Centre-ville de Montréal</td><td>Mêmes surfaces bâties, mais OSM distingue 3 à 4 fois plus de
+              bâtiments (le Référentiel regroupe les bâtiments mitoyens)</td><td>OSM</td></tr>
+            <tr><td>Beauce, milieu rural</td><td>OSM ne couvre que 27 % du bâti du Référentiel</td>
+              <td>Référentiel, OSM ajoute les bâtiments récents</td></tr>
+            <tr><td>Lévis, secteur en développement</td><td>Environ 30 % des bâtiments OSM sont absents du Référentiel,
+              dont la donnée source date de 2018</td><td>Selon la maille ; les bâtiments récents d'OSM sont
+              ajoutés partout</td></tr>
+          </table>
+          <p>Les options <b>OpenStreetMap seul</b> et <b>Référentiel québécois seul</b> désactivent la fusion. Si un
+            des deux serveurs ne répond pas, l'extraction continue avec l'autre et le signale dans le journal et
+            le <code>LISEZMOI.txt</code>. Les altitudes publiées dans le Référentiel ne sont pas utilisées : elles
+            concernent le sol, et leur référence altimétrique n'est pas précisée.</p>
+
+          <h4>Hauteurs des bâtiments</h4>
+          <p>Le Référentiel et la plupart des bâtiments OSM n'ont pas de hauteur. La hauteur est donc
+            <b>mesurée</b> dans le LiDAR HRDEM de RNCan : pour chaque emprise (rognée de 0,5 m pour éviter les
+            façades et la végétation voisine), c'est la médiane de « surface − sol ». Elle est gardée si le LiDAR
+            couvre au moins 30 % de l'emprise et si le résultat est compris entre 2 et 250 m. Sinon, l'outil prend
+            la hauteur saisie dans OSM, puis le nombre d'étages × 3 m, puis la hauteur par défaut.
+            Le champ <code>H_SRC</code> dit laquelle a été retenue ; <code>H_LIDAR</code> et <code>H_OSM</code>
+            gardent les valeurs brutes pour contrôle.</p>
+
+          <h4>Routes et débits</h4>
+          <ul>
+            <li><b>AQréseau+</b>, Adresses Québec (MRNF) : réseau routier officiel du Québec, lu sur le service web
+              du MRNF. <a href="https://www.donneesquebec.ca/recherche/dataset/adresses-quebec" target="_blank" rel="noopener">Fiche Données Québec</a></li>
+            <li><b>Débit de circulation</b>, ministère des Transports et de la Mobilité durable : DJMA, DJME, DJMH,
+              % camions et 30e heure, par section du réseau supérieur. Chaque débit garde son année
+              (<code>AN_DJMA</code>) et sa section d'origine (<code>SECT_MTMD</code>).
+              <a href="https://www.donneesquebec.ca/recherche/dataset/debit-de-circulation" target="_blank" rel="noopener">Fiche Données Québec</a></li>
+          </ul>
+
+          <h4>Affichage seulement (pas dans le ZIP)</h4>
+          <p>Le fond de plan OpenStreetMap, l'imagerie Esri et le relief ombré LiDAR servent au repérage à l'écran.
+            Ils ne sont pas utilisés dans les calculs.</p>
+
+          <h4>Vérifier en un coup d'œil</h4>
+          <ol>
+            <li>Après l'extraction, l'encadré <b>Provenance de cette extraction</b> du panneau résume les sources
+              réellement utilisées sur votre zone.</li>
+            <li>Dans l'aperçu 3D, la <b>couleur des bâtiments</b> par source de la hauteur ou de l'emprise montre
+              ce qui est mesuré et ce qui est estimé. Un clic sur un bâtiment affiche sa fiche.</li>
+            <li>Le <code>LISEZMOI.txt</code> du ZIP garde la trace complète : sources, parts, années, versions, règles.</li>
+          </ol>
         </section>
 
         <section id="h-zone">
@@ -326,8 +478,16 @@
               <td>Utile pour un contrôle dans un SIG</td></tr>
           </table>
           <h4>Bâtiments</h4>
-          <p>Emprises <b>OpenStreetMap</b>. Un bâtiment est gardé si son centre est dans la zone ; les emprises de moins de
-            5 m² sont écartées. La hauteur est choisie dans cet ordre de priorité :</p>
+          <p>Emprises <b>OpenStreetMap</b> et <b>Référentiel québécois sur les bâtiments</b>. L'option <b>Emprises</b>
+            choisit la source :</p>
+          <ul>
+            <li><b>Automatique</b> (recommandé) : la source principale est choisie par maille de 500 m selon la
+              complétude d'OSM, puis l'autre source ajoute les bâtiments manquants
+              (voir <a href="#h-provenance" class="help-link">Provenance des données</a>) ;</li>
+            <li><b>OpenStreetMap seul</b> ou <b>Référentiel québécois seul</b>.</li>
+          </ul>
+          <p>Un bâtiment est gardé si son centre est dans la zone ; les emprises de moins de 5 m² sont écartées.
+            La hauteur est choisie dans cet ordre de priorité :</p>
           <ol>
             <li><code>LIDAR</code> : médiane de (surface LiDAR − sol) sur l'emprise, entre 2 et 250 m ;</li>
             <li><code>OSM_H</code> : tag <code>height</code> d'OpenStreetMap ;</li>
@@ -407,7 +567,7 @@
             calculée à partir du plan. Un écart moyen (RMS) inférieur à 0,5 m est bon ; un point très au-dessus des
             autres est probablement mal cliqué. Avec le nombre minimum de points, les écarts sont nuls et ne prouvent
             rien : ajouter un point de contrôle. L'échelle déduite (1:500…) permet aussi de vérifier le calage.</p>
-          <p>Attention : les emprises OpenStreetMap peuvent être décalées de quelques décimètres. Vérifier le calage
+          <p>Attention : les emprises existantes (OSM ou Référentiel) peuvent être décalées de quelques décimètres. Vérifier le calage
             sur l'imagerie avec le curseur d'<b>opacité</b> ; <b>Fond blanc transparent</b> ne garde que les traits du plan.</p>
           <h4>3. Saisir les bâtiments projetés</h4>
           <ul>
@@ -439,7 +599,9 @@
             <tr><td><code>courbes_niveau.shp</code></td><td>Courbes 3D (Z = altitude), champ <code>ALTITUDE</code></td></tr>
             <tr><td><code>batiments.shp</code></td><td><code>HAUTEUR</code> (m, relative au sol), <code>H_SRC</code>,
               <code>H_LIDAR</code>, <code>H_OSM</code>, <code>NIVEAUX</code>, <code>ALT_SOL</code>, <code>TYPE</code>,
-              <code>NOM</code>, <code>STATUT</code></td></tr>
+              <code>NOM</code>, <code>STATUT</code> ; provenance de l'emprise : <code>ID_BAT</code>,
+              <code>EMP_SRC</code> (OSM | REFBATI), <code>EMP_ROLE</code> (PRINCIPAL | COMPLEMENT),
+              <code>EMP_PROD</code>, <code>EMP_DATE</code>, <code>EMP_NC</code>, <code>OSM_ID</code></td></tr>
             <tr><td><code>routes.shp</code></td><td><code>NOM</code>, <code>CLASSE</code>, <code>VIT_DEF</code>, et avec
               les débits : <code>DJMA</code>, <code>DJME</code>, <code>DJMH</code>, <code>PCT_CAM</code>, <code>H30</code>,
               <code>NB_CHAUS</code>, <code>DJMA_CH</code>, <code>RECOUVR</code>…</td></tr>
@@ -475,7 +637,11 @@
         <section id="h-limites">
           <h3>Limites</h3>
           <ul>
-            <li>Les emprises OSM peuvent être incomplètes ou décalées ; vérifier sur l'imagerie.</li>
+            <li>Les emprises peuvent être incomplètes, anciennes ou décalées ; vérifier sur l'imagerie, surtout près
+              des sources et des récepteurs.</li>
+            <li>Dans une maille où le Référentiel est la source principale, un bâtiment démoli et reconstruit
+              depuis sa date source peut garder son ancienne forme : le nouveau tracé OSM est écarté s'il recouvre
+              l'ancien (doublon).</li>
             <li>Le LiDAR peut dater de plusieurs années : les bâtiments récents prennent alors une hauteur OSM ou par défaut.</li>
             <li>Les débits MTMD ne couvrent pas les rues municipales ; utiliser des comptages locaux.</li>
             <li>Voies ferrées, écrans antibruit et nature du sol ne sont pas encore extraits.</li>
@@ -484,12 +650,19 @@
         </section>
 
         <section id="h-sources">
-          <h3>Sources et licences</h3>
+          <h3>Licences</h3>
+          <p>Données ouvertes, réutilisables à condition de citer la source (mentions reprises dans le
+            <code>LISEZMOI.txt</code>).</p>
           <ul>
             <li>Topographie : MRNF, Lidar – modèles numériques (Forêt ouverte) – CC-BY 4.0 ;
               RNCan, HRDEM 1 m et MRDEM 30 m – Licence du gouvernement ouvert – Canada</li>
             <li>Dalles et relief ombré LiDAR : MRNF, Forêt ouverte – CC-BY 4.0</li>
-            <li>Bâtiments : © contributeurs OpenStreetMap – ODbL 1.0</li>
+            <li>Bâtiments : © contributeurs OpenStreetMap –
+              <a href="https://opendatacommons.org/licenses/odbl/" target="_blank" rel="noopener">ODbL 1.0</a> ;
+              Référentiel québécois sur les bâtiments – MRNF et partenaires –
+              <a href="https://creativecommons.org/licenses/by/4.0/deed.fr" target="_blank" rel="noopener">CC-BY 4.0</a></li>
+            <li>Hauteurs : dérivées du HRDEM – RNCan –
+              <a href="https://ouvert.canada.ca/fr/licence-du-gouvernement-ouvert-canada" target="_blank" rel="noopener">Licence du gouvernement ouvert – Canada</a></li>
             <li>Routes : Adresses Québec, AQréseau+ – MRNF – CC-BY 4.0</li>
             <li>Débits : Débit de circulation – MTMD – CC-BY 4.0</li>
           </ul>

@@ -85,7 +85,7 @@ class Frame:
 
 
 def building_items(buildings, f):
-    """Volumes extrudés (une entrée par polygone) ; oid / pid relient aux bâtiments OSM / projetés."""
+    """Volumes extrudés (une entrée par polygone) ; bid / pid relient aux bâtiments existants / projetés."""
     items = []
     for i, row in enumerate(buildings.itertuples(index=False)):
         geom = row.geometry
@@ -108,9 +108,10 @@ def building_items(buildings, f):
                 "t": round(top, 2),
                 "h": _num(row.HAUTEUR), "s": row.H_SRC, "hl": _num(row.H_LIDAR), "ho": _num(row.H_OSM),
                 "nv": _num(row.NIVEAUX, 0), "n": row.NOM or "", "ty": row.TYPE or "",
+                "e": row.EMP_SRC, "er": row.EMP_ROLE or "", "ep": row.EMP_PROD or "", "ed": row.EMP_DATE or "",
             }
-            if getattr(row, "OSM_ID", ""):
-                item["oid"] = row.OSM_ID
+            if getattr(row, "ID_BAT", ""):
+                item["bid"] = row.ID_BAT
             if getattr(row, "PROJ_ID", ""):
                 item["pid"] = row.PROJ_ID
             items.append(item)

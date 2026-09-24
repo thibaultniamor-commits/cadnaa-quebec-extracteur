@@ -22,11 +22,14 @@ def main():
     p.add_argument("--no-traffic", action="store_true", help="Ne pas rattacher les débits MTMD")
     p.add_argument("--dem-source", default="foretouverte", choices=("foretouverte", "hrdem"),
                    help="MNT LiDAR : Forêt ouverte (MRNF, CGVD28) ou HRDEM (RNCan, CGVD2013)")
+    p.add_argument("--footprints", default="auto", choices=("auto", "osm", "refbati"),
+                   help="Emprises : priorité automatique par maille, OSM seul ou Référentiel québécois seul")
     p.add_argument("--out", default="output")
     a = p.parse_args()
     opts = Options(geometry=mapping(box(*a.bbox)), layers=a.layers, contour_interval=a.interval,
                    dem_resolution=a.resolution, default_height=a.default_height, crs=a.crs, dem_grid=a.dem_grid,
-                   traffic=not a.no_traffic, dem_source=a.dem_source)
+                   traffic=not a.no_traffic, dem_source=a.dem_source,
+                   footprint_source=a.footprints)
     zip_path, summary = run(opts, Path(a.out), progress=print)
     print(zip_path)
     print(json.dumps(summary, ensure_ascii=False, indent=2))

@@ -69,6 +69,15 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 #log li.ok { color: var(--ok); font-weight: 600; }
 #results { margin-top: 10px; display: grid; gap: 8px; }
 #open-3d { width: 100%; padding: 8px; font-weight: 600; }
+.prov { font-size: 12.5px; padding: 8px 10px; border-left: 3px solid var(--ok); background: var(--line); border-radius: 0 6px 6px 0; }
+.prov:empty { display: none; }
+.prov-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.prov-head a { color: var(--accent); }
+.prov dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; }
+.prov dt { color: var(--muted); }
+.prov dd { margin: 0; }
+footer a { color: var(--accent); }
+#help a { color: var(--accent); }
 
 /* ---------- Aperçu 3D ---------- */
 #viewer { position: fixed; inset: 0; z-index: 2000; background: var(--sky); }
@@ -95,7 +104,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 #viewer-pick dd { margin: 0; font-variant-numeric: tabular-nums; }
 .hidden { display: none !important; }
 
-.title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .small-btn { padding: 3px 10px; font-size: 12.5px; }
 #stale { margin: 0; }
 #viewer-bar #viewer-title { flex: 1; min-width: 0; }

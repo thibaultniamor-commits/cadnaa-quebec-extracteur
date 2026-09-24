@@ -13,6 +13,16 @@ const SRC = {
   DEFAUT: { color: "#d63b3b", label: "Valeur par défaut" },
   PROJET: { color: "#7c3aed", label: "Bâtiment projeté" },
 };
+// Source de l'emprise : source retenue pour la maille (principale) ou bâtiment ajouté par l'autre source.
+const EMP = {
+  "OSM/PRINCIPAL": { color: "#2f6fc0", label: "OSM, source principale" },
+  "OSM/COMPLEMENT": { color: "#8fc1f2", label: "OSM, complément" },
+  "REFBATI/PRINCIPAL": { color: "#2a8f4f", label: "Référentiel, source principale" },
+  "REFBATI/COMPLEMENT": { color: "#9fd9ae", label: "Référentiel, complément" },
+  PROJET: { color: "#7c3aed", label: "Bâtiment projeté" },
+};
+const empKey = (b) => (b.e === "PROJET" || !b.e ? "PROJET" : `${b.e}/${b.er}`);
+const EMP_NAMES = { OSM: "OpenStreetMap", REFBATI: "Référentiel québécois sur les bâtiments", PROJET: "Saisie sur plan" };
 const DEMOLI_COLOR = "#e02424";
 const HEIGHT_STOPS = [[0, "#3b6fb6"], [10, "#4fb0a5"], [20, "#9ccf5a"], [35, "#f2c14e"], [60, "#e0603a"]];
 const ROAD_COLORS = {
@@ -127,7 +137,9 @@ function colorBuildings(mesh, items, mode, selected) {
   const col = mesh.geometry.attributes.color;
   const cache = items.map((b, k) => {
     if (k === selected) return new THREE.Color("#ff2bd6");
-    return mode === "source" ? new THREE.Color((SRC[b.s] || SRC.DEFAUT).color) : ramp(HEIGHT_STOPS, b.h ?? 0);
+    if (mode === "source") return new THREE.Color((SRC[b.s] || SRC.DEFAUT).color);
+    if (mode === "footprint") return new THREE.Color((EMP[empKey(b)] || EMP.PROJET).color);
+    return ramp(HEIGHT_STOPS, b.h ?? 0);
   });
   for (let i = 0; i < bid.length; i++) cache[bid[i]].toArray(col.array, i * 3);
   col.needsUpdate = true;
@@ -178,8 +190,8 @@ function createView(data, projects) {
   // État projeté : existants non démolis + projetés ; les démolis restent visibles en fantômes.
   const demolis = new Set(projects.demolis);
   const all = data.buildings || [];
-  const items = all.filter((b) => !demolis.has(b.oid)).concat(projects.buildings);
-  const ghosts = all.filter((b) => demolis.has(b.oid));
+  const items = all.filter((b) => !demolis.has(b.bid)).concat(projects.buildings);
+  const ghosts = all.filter((b) => demolis.has(b.bid));
   const bmesh = buildBuildings(items, zref);
   if (bmesh) world.add(bmesh);
   const gmesh = buildBuildings(ghosts, zref);
@@ -261,6 +273,9 @@ function select(state, k) {
       <dt>H_LIDAR</dt><dd>${fmt(b.hl)}</dd>
       <dt>H_OSM</dt><dd>${fmt(b.ho)}</dd>
       <dt>NIVEAUX</dt><dd>${fmt(b.nv, "")}</dd>
+      <dt>Emprise</dt><dd>${escapeHtml(EMP_NAMES[b.e] || b.e || "—")}${b.er ? ` (${b.er === "PRINCIPAL" ? "source principale" : "complément"})` : ""}</dd>
+      ${b.e === "REFBATI" ? `<dt>Producteur</dt><dd>${escapeHtml(b.ep)}</dd>
+      <dt>Date source</dt><dd>${escapeHtml(b.ed || "inconnue")}</dd>` : ""}
     </dl>`;
   box.classList.remove("hidden");
 }
@@ -290,10 +305,11 @@ function colorRoads(state, mode) {
 
 function legend(state) {
   const el = $("viewer-legend");
-  if (state.mode === "source") {
+  if (state.mode === "source" || state.mode === "footprint") {
+    const [classes, keyOf] = state.mode === "source" ? [SRC, (b) => b.s] : [EMP, empKey];
     const counts = {};
-    state.items.forEach((b) => { counts[b.s] = (counts[b.s] || 0) + 1; });
-    el.innerHTML = Object.entries(SRC).map(([k, v]) =>
+    state.items.forEach((b) => { const k = keyOf(b); counts[k] = (counts[k] || 0) + 1; });
+    el.innerHTML = Object.entries(classes).map(([k, v]) =>
       `<div><i style="background:${v.color}"></i>${v.label} <span class="muted">(${counts[k] || 0})</span></div>`).join("");
   } else {
     el.innerHTML = HEIGHT_STOPS.map(([h, c]) => `<div><i style="background:${c}"></i>${h} m</div>`).join("");

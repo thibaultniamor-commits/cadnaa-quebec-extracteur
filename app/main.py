@@ -52,6 +52,7 @@ class ExtractRequest(BaseModel):
     dem_grid: bool = False
     traffic: bool = True
     dem_source: Literal["foretouverte", "hrdem"] = "foretouverte"
+    footprint_source: Literal["auto", "osm", "refbati"] = "auto"
 
 
 @app.get("/")
@@ -166,7 +167,7 @@ def existing_buildings(job_id: str):
     ex = _extraction(job_id)
     if ex.buildings is None:
         return {"type": "FeatureCollection", "features": []}
-    b = ex.buildings[["OSM_ID", "HAUTEUR", "geometry"]].to_crs(4326)
+    b = ex.buildings[["ID_BAT", "HAUTEUR", "geometry"]].to_crs(4326)
     return JSONResponse(content=b.__geo_interface__)
 
 
@@ -258,6 +259,6 @@ def set_projects(job_id: str, req: ProjectsRequest):
 
 @app.get("/api/jobs/{job_id}/projets")
 def projects_preview(job_id: str):
-    """Volumes des bâtiments projetés et OSM_ID démolis, dans le repère de l'aperçu 3D."""
+    """Volumes des bâtiments projetés et ID_BAT démolis, dans le repère de l'aperçu 3D."""
     ex = _extraction(job_id)
     return {"buildings": ex.projets_items, "demolis": sorted(ex.demolis)}

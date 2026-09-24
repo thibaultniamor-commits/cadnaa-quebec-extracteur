@@ -235,13 +235,13 @@
         for (let i = 0; i < o.length; i += 2) {
           s = Math.min(s, o[i]); n = Math.max(n, o[i]); w = Math.min(w, o[i + 1]); e = Math.max(e, o[i + 1]);
         }
-        P.existing.push({ id: f.properties.OSM_ID, rings, bb: [s, w, n, e] });
+        P.existing.push({ id: f.properties.ID_BAT, rings, bb: [s, w, n, e] });
       });
     });
     P.existSnap = flatSnap(P.existing.flatMap((b) => b.rings));
     existingLayer = L.geoJSON(fc, {
       renderer: L.canvas({ padding: 0.3 }), interactive: false,
-      style: (f) => (P.demolis.has(f.properties.OSM_ID) ? STYLE.demolished : STYLE.existing),
+      style: (f) => (P.demolis.has(f.properties.ID_BAT) ? STYLE.demolished : STYLE.existing),
     }).addTo(calMap);
   }
 
@@ -252,7 +252,7 @@
 
   function restyleExisting() {
     if (existingLayer) {
-      existingLayer.setStyle((f) => (P.demolis.has(f.properties.OSM_ID) ? STYLE.demolished : STYLE.existing));
+      existingLayer.setStyle((f) => (P.demolis.has(f.properties.ID_BAT) ? STYLE.demolished : STYLE.existing));
     }
   }
 

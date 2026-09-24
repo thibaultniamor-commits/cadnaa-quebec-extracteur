@@ -2,6 +2,7 @@
 import datetime as dt
 import shutil
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -31,6 +32,7 @@ class Options:
     dem_grid: bool = False
     traffic: bool = True  # débits MTMD rattachés aux routes
     dem_source: str = "foretouverte"  # foretouverte (MRNF, CGVD28) | hrdem (RNCan, CGVD2013)
+    footprint_source: str = "auto"  # auto (priorité par maille) | osm | refbati
 
 
 def auto_resolution(area_km2):
@@ -64,7 +66,7 @@ class Extraction:
     terrain: tuple | None = None                # (z, grid) de l'aperçu 3D, repère des volumes
     projets: gpd.GeoDataFrame | None = None     # bâtiments projetés saisis sur un plan calé
     projets_items: list = field(default_factory=list)
-    demolis: set = field(default_factory=set)   # OSM_ID des bâtiments existants démolis
+    demolis: set = field(default_factory=set)   # ID_BAT des bâtiments existants démolis
     projets_mode: str = "separe"                # separe : batiments_projetes.shp ; fusion : dans batiments.shp
 
 
@@ -109,8 +111,8 @@ def extract(opts: Options, out_dir: Path, progress=lambda msg: None) -> Extracti
         progress(f"Topographie : {len(ex.contours)} courbes de niveau.")
 
     if "batiments" in opts.layers:
-        progress("Bâtiments : téléchargement OpenStreetMap…")
-        b = buildings.clean(buildings.fetch_osm(zone_ll).to_crs(epsg), zone)
+        b, fp = _footprints(zone_ll, zone, epsg, opts.footprint_source, progress)
+        summary["emprises"] = fp
         progress(f"Bâtiments : {len(b)} emprises. Calcul des hauteurs LiDAR…")
         h = ground = None
         if len(b):
@@ -154,11 +156,60 @@ def extract(opts: Options, out_dir: Path, progress=lambda msg: None) -> Extracti
     return ex
 
 
+FOOTPRINT_NAMES = {"OSM": "OpenStreetMap", "REFBATI": "Référentiel québécois sur les bâtiments"}
+
+
+def _footprints(zone_ll, zone, epsg, mode, progress):
+    """Télécharge les emprises OSM et Référentiel en parallèle, puis applique la priorité par maille."""
+    wanted = {"OSM": buildings.fetch_osm, "REFBATI": buildings.fetch_refbati}
+    if mode != "auto":
+        wanted = {k: f for k, f in wanted.items() if k.lower() == mode}
+    progress("Bâtiments : téléchargement des emprises " + " et ".join(FOOTPRINT_NAMES[k] for k in wanted) + "…")
+    got, failed = {}, {}
+    with ThreadPoolExecutor(len(wanted)) as pool:
+        futures = {k: pool.submit(f, zone_ll) for k, f in wanted.items()}
+        for k, fut in futures.items():
+            try:
+                got[k] = buildings.clean(fut.result().to_crs(epsg), zone)
+            except Exception as e:  # noqa: BLE001 - en mode auto, l'autre source prend le relais
+                failed[k] = f"{type(e).__name__} : {e}"[:300]
+    if not got:
+        raise RuntimeError("Emprises de bâtiments indisponibles : " + " ; ".join(f"{FOOTPRINT_NAMES[k]} ({v})"
+                                                                              for k, v in failed.items()))
+    for k, err in failed.items():
+        progress(f"Bâtiments : {FOOTPRINT_NAMES[k]} indisponible ({err}) ; emprises de l'autre source seulement.")
+    ref = got.get("REFBATI")
+    b, fp = buildings.footprints(got.get("OSM"), ref, epsg, mode)
+    fp["indisponibles"] = sorted(failed)
+    kept_ref = b[b.EMP_SRC == "REFBATI"]
+    if ref is not None and len(ref):
+        fp["refbati_version"] = ref.VERSION.mode()[0]
+    if len(kept_ref):
+        fp["refbati_producteurs"] = kept_ref.EMP_PROD.value_counts().to_dict()
+        years = sorted({d[:4] for d in kept_ref.EMP_DATE if d})
+        fp["refbati_annees"] = [years[0], years[-1]] if years else []
+    progress("Bâtiments : " + _footprint_text(fp))
+    return b, fp
+
+
+def _footprint_text(fp):
+    n = fp["retenues"]
+    get = lambda k: n.get(k, 0)  # noqa: E731
+    head = (f"{get('OSM_PRINCIPAL') + get('OSM_COMPLEMENT')} emprises OSM, "
+            f"{get('REFBATI_PRINCIPAL') + get('REFBATI_COMPLEMENT')} du Référentiel")
+    if "mailles" in fp:
+        m, mr = fp["mailles"], fp["mailles_refbati"]
+        return (f"{head}. Source principale par maille de 500 m : OSM sur {m - mr}, Référentiel sur {mr} "
+                f"(OSM couvre {fp['couverture_osm']:.0%} du bâti du Référentiel) ; "
+                f"{get('OSM_COMPLEMENT') + get('REFBATI_COMPLEMENT')} bâtiments ajoutés en complément.")
+    return f"{head} (source unique)."
+
+
 def set_projets(ex: Extraction, items: list, demolis: list, mode: str) -> dict:
     """Enregistre les bâtiments projetés et démolis ; renvoie l'altitude du sol et les recouvrements."""
     z, grid = (ex.dtm, ex.grid) if ex.dtm is not None else ex.terrain
     p = projets.build(items, ex.epsg, z, grid)
-    known = set(ex.buildings.OSM_ID) if ex.buildings is not None else set()
+    known = set(ex.buildings.ID_BAT) if ex.buildings is not None else set()
     ex.projets, ex.demolis, ex.projets_mode = p, set(demolis) & known, mode
     ex.projets_items = preview.building_items(p, preview.Frame(ex.terrain)) if len(p) else []
     return {
@@ -175,7 +226,7 @@ def _buildings_out(ex: Extraction):
     b = ex.buildings
     if b is not None:
         b = b.copy()
-        b["STATUT"] = ["DEMOLI" if o in ex.demolis else "EXISTANT" for o in b.OSM_ID]
+        b["STATUT"] = ["DEMOLI" if o in ex.demolis else "EXISTANT" for o in b.ID_BAT]
     p = ex.projets.drop(columns="PROJ_ID") if ex.projets is not None and len(ex.projets) else None
     if p is None or ex.projets_mode == "separe":
         return b, p
@@ -242,9 +293,12 @@ def _readme(opts, s, ex=None):
     if "batiments" in s:
         lines += [
             f"  batiments.shp       {s['batiments']} bâtiments (polygones)",
+            *_readme_footprints(s.get("emprises")),
             "                      HAUTEUR : hauteur retenue (m, relative au sol)",
             "                      H_SRC   : LIDAR (DSM-DTM médian) | OSM_H (tag height) | OSM_NIV (niveaux x 3 m) | DEFAUT",
             "                      H_LIDAR, H_OSM, NIVEAUX : valeurs brutes pour contrôle ;",
+            "                      OSM_ID, TYPE, NOM, NIVEAUX, H_OSM : attributs OSM (reportés sur l'emprise du",
+            "                        Référentiel quand un même bâtiment OSM la recouvre à 50 % ou plus) ;",
             f"                      ALT_SOL : altitude du sol (m, {s['alt_ref']})",
             f"                      Répartition des sources : {s.get('hauteurs')}",
             "                      STATUT  : EXISTANT | DEMOLI (bâtiment existant à retirer dans l'état projeté)",
@@ -282,7 +336,9 @@ def _readme(opts, s, ex=None):
         "SOURCES ET LICENCES",
         "  Topographie : MRNF - Lidar, modèles numériques (Forêt ouverte) - CC-BY 4.0 ;",
         "                RNCan - MNEHR/HRDEM 1 m et MNEMR/MRDEM 30 m - Licence du gouvernement ouvert - Canada",
-        "  Bâtiments   : © contributeurs OpenStreetMap - ODbL 1.0 ; hauteurs dérivées du HRDEM (RNCan)",
+        "  Bâtiments   : © contributeurs OpenStreetMap - ODbL 1.0 ;",
+        "                Référentiel québécois sur les bâtiments - MRNF et partenaires - CC-BY 4.0 ;",
+        "                hauteurs dérivées du HRDEM (RNCan) - Licence du gouvernement ouvert - Canada",
         "  Routes      : Adresses Québec / AQréseau+ - MRNF, gouvernement du Québec - CC-BY 4.0",
         "  Débits      : Débit de circulation - ministère des Transports et de la Mobilité durable - CC-BY 4.0",
         "  Les données sont fournies à titre indicatif : vérifier avant toute étude réglementaire.",
@@ -311,6 +367,31 @@ def _readme_dem(ex):
         if info.parts.get("HRDEM") or info.parts.get("MRDEM"):
             out.append("                      Données RNCan (CGVD2013) ramenées en CGVD28 par l'écart médian mesuré : "
                        + (f"{info.offset:+.2f} m" if info.offset is not None else "non mesurable, aucun décalage"))
+    return out
+
+
+def _readme_footprints(fp):
+    if not fp:
+        return []
+    out = [
+        "                      Emprises : " + _footprint_text(fp),
+        *(["                      Règle : par maille de 500 m, OSM est la source principale si ses emprises couvrent",
+           "                        au moins 85 % de la surface bâtie du Référentiel, sinon c'est le Référentiel ;",
+           "                        l'autre source ajoute les bâtiments manquants (doublon si recouvert à 20 % ou plus)."]
+          if fp.get("mode") == "auto" else []),
+        "                      ID_BAT  : identifiant (osm:w123 = chemin OSM 123 ; ref:... = IdBati du Référentiel)",
+        "                      EMP_SRC : OSM | REFBATI ; EMP_ROLE : PRINCIPAL (source retenue pour la maille)",
+        "                        | COMPLEMENT (bâtiment absent de la source principale, ajouté sans doublon)",
+        "                      EMP_PROD, EMP_DATE, EMP_NC : producteur, date de la donnée source (vide = inconnue)",
+        "                        et niveau de complétude (NC-1 = validé manuellement) des emprises du Référentiel",
+    ]
+    if fp.get("refbati_version"):
+        years = fp.get("refbati_annees") or []
+        out.append(f"                      Référentiel version {fp['refbati_version']}"
+                   + (f", données sources {years[0]}-{years[1]}" if years else ""))
+    if fp.get("indisponibles"):
+        out.append("                      ATTENTION source indisponible lors de l'extraction : "
+                   + ", ".join(FOOTPRINT_NAMES[k] for k in fp["indisponibles"]))
     return out
 
 

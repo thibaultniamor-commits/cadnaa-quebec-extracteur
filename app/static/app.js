@@ -136,6 +136,7 @@ function requestBody() {
     dem_grid: $("dem-grid").checked,
     traffic: $("traffic").checked,
     dem_source: $("dem-source").value,
+    footprint_source: $("footprint-source").value,
   };
 }
 
@@ -169,8 +170,10 @@ $("go").onclick = async () => {
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail ? JSON.stringify(d.detail) : r.statusText);
-    if (await poll(d.job_id)) {
+    const done = await poll(d.job_id);
+    if (done) {
       job = { id: d.job_id, params: JSON.stringify(body), zip: null };
+      renderProvenance(done.summary || {});
       $("make-zip").textContent = "Générer le ZIP";
       $("results").classList.remove("hidden");
       checkStale();
@@ -193,11 +196,51 @@ async function poll(jobId) {
     shown = d.messages.length;
     if (d.status === "termine") {
       log("Données prêtes : vérifiez l'aperçu 3D, puis générez le ZIP.", "ok");
-      return true;
+      return d;
     }
     if (d.status === "erreur") { log(d.error, "err"); return false; }
     await new Promise((res) => setTimeout(res, 1500));
   }
+}
+
+// ---------- Provenance de l'extraction ----------
+const MNT_NAMES = { FORET_OUVERTE: "LiDAR Forêt ouverte (MRNF)", HRDEM: "LiDAR HRDEM (RNCan)", MRDEM: "MRDEM 30 m (RNCan)" };
+const pct = (v) => `${Math.round(v * 100)} %`;
+const escHtml = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function renderProvenance(s) {
+  const rows = [];
+  if (s.mnt_sources) {
+    const parts = Object.entries(s.mnt_sources).filter(([, v]) => v >= 0.0005).map(([k, v]) => `${MNT_NAMES[k] || k} ${pct(v)}`);
+    const years = s.mnt_annees && s.mnt_annees.length ? ` · acquisition ${s.mnt_annees.join(", ")}` : "";
+    rows.push(["Relief", `${parts.join(", ")}${years} · altitudes ${s.alt_ref}`]);
+  }
+  if (s.emprises) {
+    const e = s.emprises, n = e.retenues || {}, get = (k) => n[k] || 0;
+    const osm = get("OSM_PRINCIPAL") + get("OSM_COMPLEMENT"), ref = get("REFBATI_PRINCIPAL") + get("REFBATI_COMPLEMENT");
+    let t = `${osm} OpenStreetMap, ${ref} Référentiel québécois`;
+    if (e.mailles) t += ` · Référentiel principal sur ${e.mailles_refbati} maille(s) de 500 m sur ${e.mailles}, OSM sur les autres`;
+    if (e.refbati_annees && e.refbati_annees.length) t += ` · Référentiel : données ${e.refbati_annees.join("–")}`;
+    rows.push(["Emprises", t]);
+    if (e.indisponibles && e.indisponibles.length) {
+      rows.push(["Attention", `source indisponible : ${e.indisponibles.map((k) => (k === "OSM" ? "OpenStreetMap" : "Référentiel")).join(", ")}`, "warn"]);
+    }
+  }
+  if (s.hauteurs && s.batiments) {
+    const h = s.hauteurs, total = s.batiments;
+    const osm = (h.OSM_H || 0) + (h.OSM_NIV || 0);
+    rows.push(["Hauteurs", `${pct((h.LIDAR || 0) / total)} mesurées au LiDAR (RNCan), ${pct(osm / total)} OSM, `
+      + `${pct((h.DEFAUT || 0) / total)} valeur par défaut`, h.DEFAUT / total > 0.2 ? "warn" : ""]);
+  }
+  if (s.routes !== undefined) rows.push(["Routes", `AQréseau+ (Adresses Québec, MRNF) · ${s.routes} tronçons`]);
+  if (s.sections_mtmd !== undefined) {
+    rows.push(["Débits", `MTMD · DJMA sur ${s.routes_djma} tronçon(s) ; les autres sont sans débit (à compléter)`]);
+  }
+  rows.push(["Vitesses", "indicatives selon la classe (VIT_DEF), à valider", "muted"]);
+  $("provenance").innerHTML = `<div class="prov-head"><b>Provenance de cette extraction</b>
+      <a href="#" id="prov-more">Détails et liens officiels</a></div>
+    <dl>${rows.map(([k, v, c]) => `<dt>${k}</dt><dd class="${c || ""}">${escHtml(v)}</dd>`).join("")}</dl>`;
+  $("prov-more").onclick = (e) => { e.preventDefault(); openHelp("h-provenance"); };
 }
 
 $("open-3d").onclick = () => { if (job) window.openViewer(job.id); };
@@ -242,6 +285,11 @@ function openHelp(anchor) {
   dlg.querySelector("article").scrollTop = target ? target.offsetTop - 8 : 0;
 }
 $("open-help").onclick = () => openHelp();
+$("open-sources").onclick = () => openHelp("h-provenance");
+$("footer-sources").onclick = (e) => { e.preventDefault(); openHelp("h-provenance"); };
+$("help").querySelectorAll("article a.help-link").forEach((a) => {
+  a.onclick = (e) => { e.preventDefault(); openHelp(a.getAttribute("href").slice(1)); };
+});
 $("viewer-help").onclick = () => openHelp("h-apercu");
 $("help-close").onclick = () => $("help").close();
 $("help").addEventListener("click", (e) => { if (e.target === $("help")) $("help").close(); });
