@@ -175,3 +175,12 @@ app/
   cli.py        Extraction en ligne de commande
   static/       Interface (Leaflet + Geoman), dalles LiDAR (lidar.js), éditeur de calage (plan.js) et aperçu 3D (three.js, viewer.js)
 ```
+
+## Licence
+
+Le **code** de l'outil est distribué sous licence [MIT](LICENSE) : utilisation, modification et
+redistribution libres, y compris commerciales, à condition de conserver la mention de droit d'auteur.
+
+Les **données** produites (contenu des ZIP) restent soumises aux licences de leurs producteurs, rappelées dans
+le `LISEZMOI.txt` de chaque extraction : ODbL 1.0 pour les données issues d'OpenStreetMap, CC-BY 4.0 pour
+les données du gouvernement du Québec, Licence du gouvernement ouvert – Canada pour celles de RNCan.
