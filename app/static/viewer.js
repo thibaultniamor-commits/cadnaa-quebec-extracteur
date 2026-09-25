@@ -359,8 +359,52 @@ function legend(state) {
   }
 }
 
+// Orthophoto plaquée sur le terrain (UV par défaut du PlaneGeometry : image nord en haut, emprise du maillage).
+async function loadOrtho(state) {
+  const r = await fetch(`/api/jobs/${state.jobId}/ortho.jpg`);
+  if (!r.ok) {
+    let detail = r.statusText;
+    try { detail = (await r.json()).detail || detail; } catch { /* réponse non JSON */ }
+    throw new Error(detail);
+  }
+  const url = URL.createObjectURL(await r.blob());
+  try {
+    const tex = await new THREE.TextureLoader().loadAsync(url);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = state.renderer.capabilities.getMaxAnisotropy();
+    return tex;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function setOrtho(state, on) {
+  const mat = state.terrain.material, status = $("v-ortho-status");
+  const show = (tex) => {
+    mat.map = tex;
+    mat.vertexColors = !tex;
+    mat.needsUpdate = true;
+  };
+  if (!on) { show(null); status.classList.add("hidden"); return; }
+  status.textContent = "Chargement de la photo aérienne…";
+  status.classList.remove("hidden");
+  state.ortho ??= loadOrtho(state);
+  state.ortho.then((tex) => {
+    if (view !== state || !$("v-ortho").checked) return;
+    state.orthoTex = tex;
+    show(tex);
+    status.textContent = "Imagerie : gouvernement du Québec (MRNF).";
+  }).catch((err) => {
+    state.ortho = null; // nouvel essai possible
+    if (view !== state) return;
+    $("v-ortho").checked = false;
+    status.textContent = `Photo aérienne indisponible : ${err.message}`;
+  });
+}
+
 function dispose(state) {
   cancelAnimationFrame(state.raf);
+  if (state.orthoTex) state.orthoTex.dispose();
   window.removeEventListener("resize", state.resize);
   state.scene.traverse((o) => {
     if (o.geometry) o.geometry.dispose();
@@ -401,6 +445,7 @@ function bindControls() {
   toggle("v-roads", "roads");
   toggle("v-contours", "contours");
   toggle("v-zone", "zone");
+  $("v-ortho").onchange = (e) => { if (view) setOrtho(view, e.target.checked); };
   $("v-exag").oninput = (e) => {
     const k = Number(e.target.value);
     $("v-exag-val").textContent = `×${k}`;
@@ -433,10 +478,11 @@ window.openViewer = async (jobId) => {
     const data = await r.json();
     const projects = rp.ok ? await rp.json() : { buildings: [], demolis: [] };
     view = createView(data, projects);
+    view.jobId = jobId;
     $("viewer-title").textContent = summary(data, projects);
     $("v-demolis-row").classList.toggle("hidden", !view.gmesh);
     // Réapplique l'état des contrôles.
-    ["v-terrain", "v-buildings", "v-demolis", "v-roads", "v-contours", "v-zone"].forEach((id) => $(id).dispatchEvent(new Event("change")));
+    ["v-terrain", "v-ortho", "v-buildings", "v-demolis", "v-roads", "v-contours", "v-zone"].forEach((id) => $(id).dispatchEvent(new Event("change")));
     $("v-exag").dispatchEvent(new Event("input"));
     view.mode = $("v-mode").value;
     colorBuildings(view.bmesh, view.items, view.mode, -1);

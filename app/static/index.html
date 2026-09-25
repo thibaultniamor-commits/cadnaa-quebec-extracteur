@@ -164,6 +164,8 @@
     <div id="viewer-panel">
       <h3>Couches</h3>
       <label class="check small" data-tip="MNT allégé pour l'affichage (300 × 300 mailles au plus). Les courbes du ZIP utilisent la pleine résolution."><input type="checkbox" id="v-terrain" checked> Terrain (MNT)</label>
+      <label class="check small" data-tip="Orthophoto du gouvernement du Québec (MRNF) plaquée sur le terrain, à la place des couleurs d'altitude : contrôle des emprises de bâtiments (décalées, manquantes, démolies) et du tracé des routes. Chargée à la demande, quelques secondes. L'image peut dater de quelques années, et les toits hauts paraissent un peu décalés (vue non verticale)."><input type="checkbox" id="v-ortho"> Photo aérienne (MRNF)</label>
+      <p id="v-ortho-status" class="hint hidden"></p>
       <label class="check small" data-tip="Emprises extrudées à leur valeur HAUTEUR. Cliquer un bâtiment pour voir ses attributs."><input type="checkbox" id="v-buildings" checked> Bâtiments</label>
       <label id="v-demolis-row" class="check small hidden" data-tip="Bâtiments existants marqués démolis, en rouge transparent. Ils restent dans batiments.shp avec STATUT = DEMOLI."><input type="checkbox" id="v-demolis" checked> Bâtiments démolis</label>
       <label class="check small" data-tip="Tronçons AQréseau+ drapés sur le terrain."><input type="checkbox" id="v-roads" checked> Routes</label>
@@ -522,7 +524,8 @@
             <code>Q_J</code>, <code>Q_S</code> et <code>Q_N</code>.</p>
 
           <h4>Affichage seulement (pas dans le ZIP)</h4>
-          <p>Le fond de plan OpenStreetMap, l'imagerie Esri et le relief ombré LiDAR servent au repérage à l'écran.
+          <p>Le fond de plan OpenStreetMap, l'imagerie Esri, le relief ombré LiDAR et la photo aérienne de l'aperçu 3D
+            (orthophotos du gouvernement du Québec) servent au repérage et au contrôle à l'écran.
             Ils ne sont pas utilisés dans les calculs.</p>
 
           <h4>Vérifier en un coup d'œil</h4>
@@ -654,6 +657,10 @@
           </table>
           <p>Points à vérifier :</p>
           <ul>
+            <li><b>Photo aérienne</b> : cocher « Photo aérienne (MRNF) » pour plaquer l'orthophoto sur le terrain et
+              repérer les emprises décalées, les bâtiments manquants (construction récente) ou disparus, et les
+              routes mal tracées. La photo peut dater de quelques années ; les toits hauts paraissent légèrement
+              décalés, la prise de vue n'étant pas parfaitement verticale.</li>
             <li><b>Couleur par source</b> : les bâtiments <code>DEFAUT</code> ou <code>OSM</code> n'ont pas de hauteur
               LiDAR. Vérifier les plus importants (bâtiments proches des sources, écrans).</li>
             <li><b>Couleur par hauteur</b> : repérer les valeurs aberrantes (arbres au-dessus d'un toit, bâtiment récent
@@ -799,6 +806,8 @@
             <li>Topographie : MRNF, Lidar – modèles numériques (Forêt ouverte) – CC-BY 4.0 ;
               RNCan, HRDEM 1 m et MRDEM 30 m – Licence du gouvernement ouvert – Canada</li>
             <li>Dalles et relief ombré LiDAR : MRNF, Forêt ouverte – CC-BY 4.0</li>
+            <li>Photo aérienne de l'aperçu 3D : orthophotos du gouvernement du Québec (MRNF, service Imagerie
+              continue) – affichage seulement</li>
             <li>Bâtiments : © contributeurs OpenStreetMap –
               <a href="https://opendatacommons.org/licenses/odbl/" target="_blank" rel="noopener">ODbL 1.0</a> ;
               Référentiel québécois sur les bâtiments – MRNF et partenaires –

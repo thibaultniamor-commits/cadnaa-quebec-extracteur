@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from . import calage, crs, foretouverte, pipeline, plans
+from . import calage, crs, foretouverte, ortho, pipeline, plans
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT = ROOT.parent / "output"
@@ -179,6 +179,22 @@ def preview_data(job_id: str):
     if not job["preview"].exists():
         raise HTTPException(404, "Aperçu indisponible.")
     return FileResponse(job["preview"], media_type="application/json")
+
+
+@app.get("/api/jobs/{job_id}/ortho.jpg")
+def orthophoto(job_id: str):
+    """Orthophoto plaquée sur le terrain de l'aperçu, calculée à la première demande puis gardée en mémoire."""
+    job = _done(job_id)
+    with job["lock"]:
+        if job.get("ortho") is None:
+            ex = _extraction(job_id)
+            if ex.terrain is None:
+                raise HTTPException(404, "Aperçu sans terrain.")
+            try:
+                job["ortho"] = ortho.image(ex.terrain[1])
+            except Exception as e:  # noqa: BLE001 - service externe : l'aperçu garde ses couleurs d'altitude
+                raise HTTPException(502, f"Service d'imagerie du MRNF indisponible ({type(e).__name__}).") from e
+    return Response(job["ortho"], media_type="image/jpeg", headers={"Cache-Control": "max-age=3600"})
 
 
 @app.get("/api/jobs/{job_id}/batiments")
