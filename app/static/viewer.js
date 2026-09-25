@@ -83,12 +83,39 @@ function buildTerrain(t, zref) {
   }
   geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
   geo.computeVertexNormals();
-  const mat = new THREE.MeshLambertMaterial({
-    vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
-  });
+  // Pas de polygonOffset : il repousse le sol en profondeur et laisse voir le pied enterré des bâtiments en vue
+  // rasante. Routes, courbes et zone sont déjà surélevées au-dessus du terrain.
+  const mat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
   // PlaneGeometry est centré ; les données sont centrées sur le centre des cellules extrêmes.
   const mesh = new THREE.Mesh(geo, mat);
+  mesh.add(buildBase(pos, t.nx, t.ny, zmin - zref - Math.max(5, (zmax - zmin) * 0.1)));
   return { mesh, zmin, zmax };
+}
+
+// Socle fermé sous le terrain (parois sur les 4 bords + fond) : vu d'en dessous ou en vue rasante, le terrain
+// n'est plus une simple feuille qui laisse voir le pied des bâtiments, enfoncé sous le sol. Enfant du maillage
+// du terrain : suit son affichage et l'exagération du relief.
+function buildBase(pos, nx, ny, bottom) {
+  const ring = [];
+  for (let i = 0; i < nx; i++) ring.push(i);                          // bord nord
+  for (let j = 1; j < ny; j++) ring.push(j * nx + nx - 1);            // bord est
+  for (let i = nx - 2; i >= 0; i--) ring.push((ny - 1) * nx + i);     // bord sud
+  for (let j = ny - 2; j > 0; j--) ring.push(j * nx);                 // bord ouest
+  ring.push(ring[0]);
+  const v = [];
+  for (let k = 0; k < ring.length - 1; k++) {
+    const a = ring[k], b = ring[k + 1];
+    const [ax, ay, az] = [pos.getX(a), pos.getY(a), pos.getZ(a)];
+    const [bx, by, bz] = [pos.getX(b), pos.getY(b), pos.getZ(b)];
+    v.push(ax, ay, az, bx, by, bz, bx, bottom, bz, ax, ay, az, bx, bottom, bz, ax, bottom, az);
+  }
+  // Fond : rectangle aux quatre coins de la grille.
+  const c = [0, nx - 1, ny * nx - 1, (ny - 1) * nx].map((i) => [pos.getX(i), bottom, pos.getZ(i)]);
+  v.push(...c[0], ...c[1], ...c[2], ...c[0], ...c[2], ...c[3]);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(v, 3));
+  geo.computeVertexNormals();
+  return new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: "#8a7a64", side: THREE.DoubleSide }));
 }
 
 function buildBuildings(items, zref) {
@@ -303,19 +330,20 @@ function colorRoads(state, mode) {
     for (let s = 0; s < r.c.length - 1; s++, v += 2) { c.toArray(col.array, v * 3); c.toArray(col.array, v * 3 + 3); }
   });
   col.needsUpdate = true;
-  const el = $("viewer-road-legend");
+  // Nombre de tronçons par entrée de légende (chaque couleur est propre à une entrée).
+  const counts = {};
+  roads.userData.items.forEach((r) => { const k = roadColor[mode](r); counts[k] = (counts[k] || 0) + 1; });
+  const entry = (col, label) =>
+    `<div><i style="background:${col}"></i>${label} <span class="muted">(${counts[col] || 0})</span></div>`;
+  let entries;
   if (mode === "djma") {
-    const n = roads.userData.items.filter((r) => r.d !== null && r.d !== undefined).length;
-    el.innerHTML = DJMA_CLASSES.map(([, col, label]) => `<div><i style="background:${col}"></i>${label} véh/j</div>`).join("")
-      + `<div><i style="background:${DJMA_NONE}"></i>Sans donnée <span class="muted">(${roads.userData.items.length - n})</span></div>`;
+    entries = [...DJMA_CLASSES.map(([, col, label]) => [col, `${label} véh/j`]), [DJMA_NONE, "Sans donnée"]];
   } else if (mode === "speed") {
-    const n = roads.userData.items.filter((r) => r.vs === "DEFAUT").length;
-    el.innerHTML = SPEED_CLASSES.map(([, col, label]) => `<div><i style="background:${col}"></i>${label}</div>`).join("")
-      + `<div><i style="background:${DJMA_NONE}"></i>Défaut de la classe, à vérifier <span class="muted">(${n})</span></div>`;
+    entries = [...SPEED_CLASSES.map(([, col, label]) => [col, label]), [DJMA_NONE, "Valeur par défaut, à vérifier"]];
   } else {
-    el.innerHTML = Object.entries(ROAD_COLORS).map(([k, col]) => `<div><i style="background:${col}"></i>${k}</div>`).join("")
-      + `<div><i style="background:${ROAD_DEFAULT}"></i>Autres</div>`;
+    entries = [...Object.entries(ROAD_COLORS).map(([k, col]) => [col, k]), [ROAD_DEFAULT, "Autres"]];
   }
+  $("viewer-road-legend").innerHTML = entries.map(([col, label]) => entry(col, label)).join("");
 }
 
 function legend(state) {

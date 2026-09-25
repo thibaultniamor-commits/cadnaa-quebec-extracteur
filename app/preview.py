@@ -30,14 +30,30 @@ def _downsample(dtm, grid, factor):
     return z, g
 
 
-def terrain(dtm, grid, zone, bbox_ll, epsg):
-    """Grille de terrain d'au plus MAX_CELLS de côté (réutilise le MNT calculé, sinon lecture grossière)."""
+def _crop(dtm, grid, bounds):
+    """Fenêtre du MNT couvrant `bounds` (bornée à la grille)."""
+    x0, y0, x1, y1 = bounds
+    c0 = max(0, int((x0 - grid.transform.c) // grid.res))
+    c1 = min(grid.width, int(math.ceil((x1 - grid.transform.c) / grid.res)))
+    r0 = max(0, int((grid.transform.f - y1) // grid.res))
+    r1 = min(grid.height, int(math.ceil((grid.transform.f - y0) / grid.res)))
+    g = topo.Grid(grid.crs, topo.Affine(grid.res, 0, grid.transform.c + c0 * grid.res, 0, -grid.res,
+                                        grid.transform.f - r0 * grid.res), c1 - c0, r1 - r0, grid.res)
+    return dtm[r0:r1, c0:c1], g
+
+
+def terrain(dtm, grid, area, bbox_ll, epsg):
+    """Grille de terrain d'au plus MAX_CELLS de côté couvrant `area` (zone + marge + bâtiments en bordure).
+
+    Réutilise le MNT calculé (recadré), sinon lecture grossière du HRDEM.
+    """
     if dtm is not None:
+        dtm, grid = _crop(dtm, grid, area.buffer(2 * grid.res).bounds)
         factor = max(1, math.ceil(max(grid.width, grid.height) / MAX_CELLS))
         return _downsample(dtm, grid, factor)
-    x0, y0, x1, y1 = zone.bounds
+    x0, y0, x1, y1 = area.bounds
     res = max(2.0, math.ceil(max(x1 - x0, y1 - y0) / MAX_CELLS))
-    g = topo.Grid.covering(zone.buffer(2 * res).bounds, res, f"EPSG:{epsg}")
+    g = topo.Grid.covering(area.buffer(2 * res).bounds, res, f"EPSG:{epsg}")
     z, _ = topo.build_dtm(bbox_ll, g, source="hrdem")  # même référence (CGVD2013) que ALT_SOL sans topographie
     return z, g
 
@@ -77,6 +93,29 @@ class Frame:
     def loc(self, coords):
         return [[round(x - self.cx, 1), round(y - self.cy, 1)] for x, y, *_ in coords]
 
+    def lowest(self, poly):
+        """Altitude la plus basse du maillage sous l'emprise : nœuds des mailles qu'elle touche et contour densifié.
+
+        Le pied du volume y est calé ; caler sur les seuls sommets laisse le sol passer dessous (creux, longs murs).
+        """
+        g, z = self.grid, self.sample.z
+        x0, y0, x1, y1 = poly.bounds
+        # Nœuds (centres de cellules) des mailles touchées : bornes élargies d'une maille.
+        c0 = max(0, int((x0 - g.transform.c) / g.res - 1.5))
+        c1 = min(g.width, int((x1 - g.transform.c) / g.res + 1.5) + 1)
+        r0 = max(0, int((g.transform.f - y1) / g.res - 1.5))
+        r1 = min(g.height, int((g.transform.f - y0) / g.res + 1.5) + 1)
+        low = np.inf
+        if c1 > c0 and r1 > r0:
+            xs = g.transform.c + (np.arange(c0, c1) + 0.5) * g.res
+            ys = g.transform.f - (np.arange(r0, r1) + 0.5) * g.res
+            xx, yy = np.meshgrid(xs, ys)
+            near = shapely.dwithin(poly, shapely.points(xx.ravel(), yy.ravel()), g.res * 1.5)
+            if near.any():
+                low = float(z[r0:r1, c0:c1].ravel()[near].min())
+        ring = np.asarray(shapely.segmentize(poly.exterior, g.res / 2).coords)[:, :2]
+        return min(low, float(self.sample(ring[:, 0], ring[:, 1]).min()))
+
     def draped(self, line, offset):
         line = shapely.segmentize(line, self.grid.res)
         xy = np.asarray(line.coords)[:, :2]
@@ -97,8 +136,7 @@ def building_items(buildings, f):
         for part in parts:
             if not isinstance(part, Polygon) or part.is_empty:
                 continue
-            ring = np.asarray(part.exterior.coords)[:, :2]
-            ground_min = min(float(f.sample(ring[:, 0], ring[:, 1]).min()), ground_mesh)
+            ground_min = min(f.lowest(part), ground_mesh)
             item = {
                 "id": i,
                 "o": f.loc(part.exterior.coords),

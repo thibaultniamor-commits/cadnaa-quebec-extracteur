@@ -187,7 +187,7 @@ def extract(opts: Options, out_dir: Path, progress=lambda msg: None) -> Extracti
         ex.roads = r
 
     progress("Aperçu 3D : préparation…")
-    ex.terrain = preview.terrain(ex.dtm, ex.grid, zone, bbox_ll, epsg)
+    ex.terrain = preview.terrain(ex.dtm, ex.grid, terrain_zone(zone, ex.buildings), bbox_ll, epsg)
     data = preview.build(zone, ex.terrain, buildings=ex.buildings, roads=ex.roads, contours=ex.contours,
                          stats=summary)
     preview.write(ex.preview_path, data)

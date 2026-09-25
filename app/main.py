@@ -32,6 +32,17 @@ app = FastAPI(title="Extracteur CadnaA - Québec", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 app.add_middleware(GZipMiddleware, minimum_size=50_000)
 
+
+@app.middleware("http")
+async def revalidate_static(request, call_next):
+    """Page et fichiers statiques revalidés à chaque chargement : sans cela, le navigateur garde l'ancien
+    JavaScript (modules surtout) après une mise à jour de l'outil. La revalidation (ETag) reste légère."""
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith("/static/"):
+        response.headers.setdefault("Cache-Control", "no-cache")
+    return response
+
 _executor = ThreadPoolExecutor(max_workers=2)
 _jobs: dict[str, dict] = {}
 _lock = threading.Lock()
