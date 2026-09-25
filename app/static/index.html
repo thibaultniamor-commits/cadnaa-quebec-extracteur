@@ -90,7 +90,7 @@
         </label>
       </div>
 
-      <label class="check" data-tip="Réseau routier AQréseau+ (Adresses Québec), découpé à la zone. Chaque tronçon porte son nom, sa classe et une vitesse indicative (VIT_DEF) selon la classe."><input type="checkbox" name="layer" value="routes" checked> Routes (AQréseau+)</label>
+      <label class="check" data-tip="Réseau routier AQréseau+ (Adresses Québec), découpé à la zone. Chaque tronçon porte son nom, sa classe et une vitesse indicative (VIT_DEF) selon la classe et le milieu : 50 km/h en ville hors autoroutes."><input type="checkbox" name="layer" value="routes" checked> Routes (AQréseau+)</label>
       <div class="sub-opts">
         <label class="check small" data-tip="Rattache aux tronçons les débits du MTMD (réseau supérieur seulement) : DJMA, DJME, DJMH, % camions, 30e heure. Les rues municipales restent sans débit."><input type="checkbox" id="traffic" checked> Débits MTMD (DJMA, % camions)</label>
         <label data-tip="Répartition du DJMA entre jour (7-19 h), soir (19-23 h) et nuit (23-7 h), pour calculer les débits horaires Q_J, Q_S, Q_N. Total = 100 %. Profil type à valider avec des comptages horaires.">Profil J / S / N
@@ -334,7 +334,7 @@
               <td><b>OpenStreetMap</b> : vitesse affichée sur les panneaux, telle que saisie par les contributeurs</td>
               <td>Vitesse OSM des autres tronçons de la même rue, sinon <b>valeur indicative de l'outil</b> selon la
                 classe de route</td>
-              <td><code>VIT_SRC</code> (OSM | OSM_RUE | DEFAUT) ; aperçu 3D « Vitesse » (gris = indicative)</td></tr>
+              <td><code>VIT_SRC</code> (OSM | OSM_RUE | OSM_VOIS | DEFAUT) ; aperçu 3D « Vitesse » (gris = indicative)</td></tr>
             <tr><td>Nombre de voies, largeur</td>
               <td><b>OpenStreetMap</b></td>
               <td><b>Hypothèse de l'outil</b> : 2 voies (1 en sens unique) ; largeur = voies × 3,5 m</td>
@@ -477,9 +477,12 @@
             <tr><th>Information</th><th>1<sup>er</sup> choix</th><th>2<sup>e</sup> choix</th><th>En dernier recours</th></tr>
             <tr><td>Limite de vitesse (<code>VITESSE</code>)</td>
               <td>Vitesse saisie dans OSM pour ce tronçon <span class="muted">(<code>VIT_SRC = OSM</code>)</span></td>
-              <td>Vitesse la plus fréquente sur le reste de la même rue <span class="muted">(<code>OSM_RUE</code>)</span></td>
-              <td>Valeur indicative selon la classe : autoroute 100, nationale et régionale 90, collectrice 70,
-                locale 50 km/h, bretelles 50 à 70 km/h <span class="muted">(<code>DEFAUT</code>)</span></td></tr>
+              <td>Vitesse la plus fréquente sur le reste de la même rue <span class="muted">(<code>OSM_RUE</code>)</span>,
+                sinon sur les tronçons de même classe et même milieu à moins de 500 m
+                <span class="muted">(<code>OSM_VOIS</code>)</span></td>
+              <td>Valeur indicative selon la classe et le milieu : en ville 50 km/h (autoroute 100) ; à la campagne
+                nationale et régionale 90, collectrice 70, locale 70 km/h ; bretelles 50 à 70 km/h
+                <span class="muted">(<code>DEFAUT</code>)</span></td></tr>
             <tr><td>Nombre de voies (<code>VOIES</code>)</td>
               <td>Nombre saisi dans OSM</td><td>–</td>
               <td>2 voies, ou 1 si la rue est à sens unique</td></tr>
@@ -603,10 +606,16 @@
           </ol>
           <h4>Routes et débits</h4>
           <p>Réseau <b>AQréseau+</b> (Adresses Québec) découpé à la zone. <code>VIT_DEF</code> est une vitesse
-            <b>indicative</b> déduite de la classe de route.</p>
+            <b>indicative</b> déduite de la classe de route et du milieu (<code>MILIEU</code>). En milieu
+            <b>urbain</b>, repéré par la densité du réseau routier (au moins 8 km de routes par km² dans un rayon de
+            250 m), elle est de 50 km/h, la limite par défaut en ville du Code de la sécurité routière, sauf sur les
+            autoroutes et leurs bretelles. En milieu <b>rural</b>, elle suit la classe (90 km/h pour une nationale ou
+            une régionale, 70 pour une collectrice ou une rue locale).</p>
           <p>L'option <b>Vitesses, voies et revêtement (OSM)</b> rattache à chaque tronçon le chemin OpenStreetMap
             parallèle le plus proche. <code>VITESSE</code> est la vitesse retenue : le <code>maxspeed</code> OSM du
-            tronçon (<code>VIT_SRC = OSM</code>), sinon celui qui domine sur la même rue (<code>OSM_RUE</code>),
+            tronçon (<code>VIT_SRC = OSM</code>), sinon celui qui domine sur la même rue (<code>OSM_RUE</code>), sinon celui
+            qui domine sur les tronçons de même classe et même milieu à moins de 500 m (<code>OSM_VOIS</code> : reprend
+            la politique locale, comme les rues résidentielles à 30 ou 40 km/h),
             sinon <code>VIT_DEF</code> (<code>DEFAUT</code>, à vérifier). <code>VOIES</code>, <code>LARG_M</code>,
             <code>SENS_UNIQ</code> et <code>REVET</code> suivent la même logique.</p>
           <p>L'option <b>Débits MTMD</b> rattache les sections de trafic du ministère des Transports : DJMA (annuel),

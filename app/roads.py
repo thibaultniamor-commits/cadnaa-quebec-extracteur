@@ -1,5 +1,6 @@
 """Routes : AQréseau+ (Adresses Québec, MRNF) via le service ArcGIS REST."""
 import geopandas as gpd
+import numpy as np
 from shapely.geometry import shape
 from shapely.ops import transform as shp_transform
 
@@ -19,10 +20,16 @@ ROAD_LAYERS = [
     (88, "Bretelle collectrice", 50),
     (91, "Accès aux ressources", 70),
     (93, "Bretelle accès ressources", 50),
-    (97, "Locale", 50),
+    (97, "Locale", 70),  # en milieu rural (rangs) ; 50 en milieu urbain
     (98, "Rue piétonne", 0),
     (101, "Autre route", 30),
 ]
+
+# En milieu urbain, la vitesse par défaut est de 50 km/h (Code de la sécurité routière, art. 328) : une
+# « Nationale » qui traverse une ville y est presque toujours à 50, pas à 90. Autoroutes et bretelles inchangées.
+URBAN_SPEED = {"Nationale": 50, "Régionale": 50, "Collectrice": 50, "Accès aux ressources": 50, "Locale": 50}
+URBAN_RADIUS_M = 250
+URBAN_DENSITY_KM_KM2 = 8.0  # réseau routier autour du tronçon : quadrillage urbain ~15-25, campagne < 3
 
 PAGE = 1000
 
@@ -77,6 +84,28 @@ def fetch(zone_ll):
             })
     return gpd.GeoDataFrame(rows, columns=["NOM", "NO_RTE", "CLASSE", "CLS_AQ", "CARACT", "GESTION", "VIT_DEF",
                                            "geometry"], geometry="geometry", crs=4326)
+
+
+def urban_speeds(gdf_proj, zone):
+    """MILIEU (URBAIN | RURAL) d'après la densité du réseau dans un rayon de 250 m, et VIT_DEF en conséquence.
+
+    La densité est rapportée à la partie du cercle située dans la zone, le réseau n'étant connu que là.
+    """
+    out = gdf_proj.copy()
+    if not len(out):
+        out["MILIEU"] = []
+        return out
+    sindex = out.sindex
+    density = np.zeros(len(out))
+    for i, g in enumerate(out.geometry):
+        circle = g.interpolate(0.5, normalized=True).buffer(URBAN_RADIUS_M)
+        area = circle.intersection(zone).area
+        near = out.geometry.iloc[sindex.query(circle, predicate="intersects")]
+        density[i] = near.intersection(circle).length.sum() / area * 1000 if area > 0 else 0.0
+    urban = density >= URBAN_DENSITY_KM_KM2
+    out["MILIEU"] = np.where(urban, "URBAIN", "RURAL")
+    out["VIT_DEF"] = [URBAN_SPEED.get(c, v) if u else v for c, v, u in zip(out.CLASSE, out.VIT_DEF, urban)]
+    return out
 
 
 def clip(gdf_proj, zone):

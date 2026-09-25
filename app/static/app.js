@@ -244,8 +244,8 @@ function renderProvenance(s) {
     rows.push(["Débits", `MTMD · DJMA sur ${s.routes_djma} tronçon(s) ; les autres sont sans débit (à compléter)`]);
   }
   if (s.routes_vit_osm !== undefined) {
-    rows.push(["Vitesses", `OpenStreetMap sur ${pct(s.routes_vit_osm)} du linéaire ; le reste : vitesse indicative `
-      + "de la classe (VIT_SRC = DEFAUT), à valider", s.routes_vit_osm < 0.5 ? "warn" : ""]);
+    rows.push(["Vitesses", `OpenStreetMap sur ${pct(s.routes_vit_osm)} du linéaire (tronçon, rue ou voisinage) ; le reste : vitesse indicative `
+      + "selon la classe et le milieu (VIT_SRC = DEFAUT), à valider", s.routes_vit_osm < 0.5 ? "warn" : ""]);
     rows.push(["Voies, revêtement", `OpenStreetMap : voies sur ${pct(s.routes_voies_osm)}, revêtement sur `
       + `${pct(s.routes_revet_osm)} du linéaire ; ailleurs valeurs par défaut`]);
     if (s.routes_osm_indisponible) rows.push(["Attention", "OpenStreetMap indisponible : valeurs par défaut partout", "warn"]);

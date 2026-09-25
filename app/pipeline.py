@@ -167,7 +167,7 @@ def extract(opts: Options, out_dir: Path, progress=lambda msg: None) -> Extracti
         pool = ThreadPoolExecutor(1)
         osm_ways = pool.submit(osmroads.fetch, zone_ll) if opts.road_attrs else None
         pool.shutdown(wait=False)
-        r = roads.clip(roads.fetch(zone_ll).to_crs(epsg), zone)
+        r = roads.urban_speeds(roads.clip(roads.fetch(zone_ll).to_crs(epsg), zone), zone)
         summary.update(routes=len(r), routes_km=round(float(r.geometry.length.sum()) / 1000, 2))
         progress(f"Routes : {len(r)} tronçons ({summary['routes_km']} km).")
         if opts.traffic:
@@ -210,7 +210,7 @@ def _road_attrs(r, osm_ways, epsg, summary, progress):
     share = (lambda mask: round(float(km[mask].sum() / km.sum()), 3) if km.sum() else 0.0)
     summary.update(routes_vit_osm=share(r.VIT_SRC != "DEFAUT"), routes_voies_osm=share(r.VOIES_SRC == "OSM"),
                    routes_revet_osm=share(r.REVET != "INCONNU"))
-    progress(f"Routes : vitesse OSM sur {summary['routes_vit_osm']:.0%} du linéaire (rue comprise), voies sur "
+    progress(f"Routes : vitesse OSM sur {summary['routes_vit_osm']:.0%} du linéaire (rue et voisinage compris), voies sur "
              f"{summary['routes_voies_osm']:.0%}, revêtement sur {summary['routes_revet_osm']:.0%} ; "
              "le reste prend les valeurs par défaut de la classe.")
     return r
@@ -421,7 +421,10 @@ def _readme(opts, s, ex=None):
         lines += [
             f"  routes.shp          {s['routes']} tronçons ({s['routes_km']} km, polylignes)",
             "                      NOM, NO_RTE, CLASSE (classe AQréseau+), CLS_AQ, CARACT, GESTION, LONG_M",
-            "                      VIT_DEF : vitesse INDICATIVE selon la classe - à valider",
+            "                      VIT_DEF : vitesse INDICATIVE selon la classe et le milieu - à valider ; en milieu",
+            "                        URBAIN, 50 km/h (Code de la sécurité routière, art. 328) sauf autoroutes et bretelles",
+            "                      MILIEU : URBAIN | RURAL, d'après la densité du réseau routier dans un rayon de 250 m",
+            "                        (urbain à partir de 8 km de routes par km²)",
             *_readme_road_attrs(s),
         ]
         if "sections_mtmd" in s:
@@ -475,7 +478,8 @@ def _readme_road_attrs(s):
     out = [
         "                      Attributs OpenStreetMap rattachés au chemin OSM parallèle le plus proche (OSM_RTE, OSM_HWY) :",
         "                      VITESSE : vitesse retenue (km/h) - VIT_SRC : OSM (maxspeed du tronçon) | OSM_RUE (maxspeed",
-        "                        dominant de la même rue) | DEFAUT (= VIT_DEF) ; "
+        "                        dominant de la même rue) | OSM_VOIS (maxspeed dominant des tronçons de même classe et même",
+        "                        milieu à moins de 500 m) | DEFAUT (= VIT_DEF) ; "
         f"vitesse OSM sur {s['routes_vit_osm']:.0%} du linéaire",
         "                      VOIES : nombre de voies (sur la chaussée dessinée) - VOIES_SRC : OSM | DEFAUT (2, ou 1 en sens",
         f"                        unique) ; nombre OSM sur {s['routes_voies_osm']:.0%} du linéaire",

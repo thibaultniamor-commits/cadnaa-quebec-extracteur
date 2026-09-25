@@ -7,6 +7,7 @@ import re
 
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 from shapely.geometry import LineString, Point
 
 from .buildings import _overpass
@@ -126,10 +127,39 @@ def _street_speed(roads, speed):
     return df.join(dominant.rename("street"), on=["NOM", "CLASSE"]).street.to_numpy(dtype=float)
 
 
+NEIGHBOUR_RADIUS_M = 500
+
+
+def _neighbour_speed(roads, speed):
+    """Vitesse OSM dominante (en longueur) des tronçons de même classe et même milieu à moins de 500 m, ou NaN.
+
+    Reprend la politique locale (rues résidentielles à 30 ou 40 km/h selon la municipalité, rangs à 80) là où
+    ni le tronçon ni sa rue n'ont de maxspeed.
+    """
+    out = np.full(len(roads), np.nan)
+    known = np.flatnonzero(~np.isnan(speed))
+    if not len(known):
+        return out
+    milieu = roads["MILIEU"].to_numpy() if "MILIEU" in roads else np.full(len(roads), "")
+    classes = roads.CLASSE.to_numpy()
+    ref = roads.iloc[known]
+    sindex = ref.sindex
+    lengths = ref.geometry.length.to_numpy()
+    for i, g in enumerate(roads.geometry):
+        if not np.isnan(speed[i]):
+            continue
+        near = sindex.query(g.buffer(NEIGHBOUR_RADIUS_M), predicate="intersects")
+        near = near[(classes[known[near]] == classes[i]) & (milieu[known[near]] == milieu[i])]
+        if len(near):
+            s = pd.Series(lengths[near]).groupby(speed[known[near]]).sum()
+            out[i] = s.idxmax()
+    return out
+
+
 def attach(roads, ways):
     """Ajoute aux tronçons (même CRS projeté) vitesse, voies, largeur, sens unique et revêtement.
 
-    Sans maxspeed OSM, la vitesse retenue est VIT_DEF (vitesse indicative de la classe AQréseau+).
+    Sans maxspeed OSM sur le tronçon, sa rue ou son voisinage, la vitesse retenue est VIT_DEF (classe et milieu).
     """
     roads = roads.copy()
     n = len(roads)
@@ -156,9 +186,12 @@ def attach(roads, ways):
     has_speed = ~np.isnan(speed)
     street = _street_speed(roads, speed)
     has_street = ~has_speed & ~np.isnan(street)
-    roads["VITESSE"] = np.select([has_speed, has_street], [speed, street], roads.VIT_DEF.to_numpy(dtype=float))
+    near = _neighbour_speed(roads, speed)
+    has_near = ~has_speed & ~has_street & ~np.isnan(near)
+    roads["VITESSE"] = np.select([has_speed, has_street, has_near], [speed, street, near],
+                                 roads.VIT_DEF.to_numpy(dtype=float))
     roads["VITESSE"] = roads["VITESSE"].astype(int)
-    roads["VIT_SRC"] = np.select([has_speed, has_street], ["OSM", "OSM_RUE"], "DEFAUT")
+    roads["VIT_SRC"] = np.select([has_speed, has_street, has_near], ["OSM", "OSM_RUE", "OSM_VOIS"], "DEFAUT")
 
     # Sans lanes OSM : 2 voies (1 par sens, ou 2 par chaussée d'autoroute), 1 voie pour un sens unique.
     default_lanes = np.where(oneway & (classes != "Autoroute"), 1, 2)
