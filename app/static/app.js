@@ -337,7 +337,7 @@ const progress = (() => {
     stage(bounds) {
       if (!Array.isArray(bounds)) return;   // serveur sans avancement : la barre reste indéterminée
       const [a, b] = bounds;
-      if (a !== stage[0] || b !== stage[1]) { stage = [a, b]; since = performance.now(); shown = Math.max(shown, a); }
+      if (a !== stage[0] || b !== stage[1]) { stage = [a, b]; since = performance.now(); shown = Math.max(shown, a); render(); }
     },
     // Nouveau message : l'étape précédente est faite, celle-ci est en cours.
     step(msg) {
