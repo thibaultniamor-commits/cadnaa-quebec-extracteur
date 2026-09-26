@@ -1,48 +1,54 @@
 "use strict";
 // Bâtiments projetés : import d'un plan (PDF ou DXF), calage par points sur les emprises existantes,
 // superposition sur la carte (transparence, rognage), saisie des emprises et des démolitions.
-// Utilise les globales de app.js : $, map, zone, job, openHelp, resetZip.
+// Utilise les globales de app.js : $, job, openHelp, resetZip, mainBounds, setMainProjects, et carto.js.
+// Deux cartes OpenLayers : le plan dans ses propres unités, la carte dans la projection de l'extraction.
 
 (() => {
   const VIOLET = "#7c3aed";
   const DXF_COLOR = "#d6007e";
   const SNAP_PX = 10;
   const LEVEL_H = 3;
+
+  const stroke = (color, width, lineDash) => new ol.style.Stroke({ color, width, lineDash });
+  const fill = (color) => new ol.style.Fill({ color });
   const STYLE = {
-    existing: { color: "#f5c400", weight: 1.5, fillOpacity: 0.08, fillColor: "#f5c400" },
-    demolished: { color: "#e02424", weight: 2, dashArray: "4 3", fillColor: "#e02424", fillOpacity: 0.35 },
-    project: { color: VIOLET, weight: 2, fillColor: VIOLET, fillOpacity: 0.25 },
-    selected: { color: "#ff2bd6", weight: 3, fillColor: VIOLET, fillOpacity: 0.35 },
+    existing: new ol.style.Style({ stroke: stroke("#f5c400", 1.5), fill: fill("rgba(245, 196, 0, 0.08)") }),
+    demolished: new ol.style.Style({ stroke: stroke("#e02424", 2, [4, 3]), fill: fill("rgba(224, 36, 36, 0.35)") }),
+    project: { stroke: stroke(VIOLET, 2), fill: fill("rgba(124, 58, 237, 0.25)") },
+    selected: { stroke: stroke("#ff2bd6", 3), fill: fill("rgba(124, 58, 237, 0.35)") },
+    crop: new ol.style.Style({ stroke: stroke("#ff3b30", 2, [6, 4]) }),
+    snap: new ol.style.Style({ image: new ol.style.Circle({ radius: 7, stroke: stroke("#ff3b30", 2) }) }),
+    draw: new ol.style.Style({
+      stroke: stroke(VIOLET, 2), fill: fill("rgba(124, 58, 237, 0.12)"),
+      image: new ol.style.Circle({ radius: 4, fill: fill(VIOLET) }),
+    }),
   };
 
   const P = {
-    plan: null,       // { name, kind, pdf: {id, pages, page, w, h, dpi, url}, dxf: {...} }
+    plan: null,       // { name, kind, pdf: {id, pages, page, w, h, dpi, url, img}, dxf: {...} }
     crop: null,       // [xmin, ymin, xmax, ymax] en coordonnées plan (y vers le haut)
-    pairs: [],        // { p: [x, y], ll: [lat, lng], pm, mm }
+    pairs: [],        // { p: [x, y], ll: [lat, lng], pf, mf } : points plan et carte, et leurs objets
     pending: null,    // paire dont seul le point plan est posé
     fit: null,        // réponse de /api/calage (ok)
     fitInfo: null,    // dernière réponse, même en échec
     mode: null,       // pick-plan | pick-map | crop | draw | take | demol
-    projects: [],     // { id, nom, niveaux, hauteur, plan, ring: [[lat, lng]], layer, alt, surf }
+    projects: [],     // { id, nom, niveaux, hauteur, plan, ring: [[lat, lng]], feature, alt, surf }
     demolis: new Set(),
     covered: [],
     selected: null,
-    existing: [],     // { id, rings: [Float64Array lat,lng], bb }
-    existSnap: null, planSnap: null, dxfMapSnap: null,
+    existSnap: null, planSnap: null,
     jobId: null, viewSet: false, touched: false,
     lastHeight: 9, lastLevels: null, seq: 0,
   };
 
-  let planMap, calMap, planRenderer, dxfMapRenderer, existingLayer, planLayer, dxfMapLayer, mapImg, cropLayer;
-  let snapPlanMk, snapMapMk, projGroup, mainGroup;
-
   // ---------- Géométrie ----------
 
-  // Affine plan -> carte : lng = a x + b y + c ; lat = d x + e y + f.
-  const toLL = (A, x, y) => [A[3] * x + A[4] * y + A[5], A[0] * x + A[1] * y + A[2]];
-  function toPlan(A, lat, lng) {
+  // Affine plan -> carte : X = a x + b y + c ; Y = d x + e y + f (projection de la carte de l'éditeur).
+  const toView = (A, x, y) => [A[0] * x + A[1] * y + A[2], A[3] * x + A[4] * y + A[5]];
+  function toPlan(A, X, Y) {
     const [a, b, c, d, e, f] = A, det = a * e - b * d;
-    return [(e * (lng - c) - b * (lat - f)) / det, (-d * (lng - c) + a * (lat - f)) / det];
+    return [(e * (X - c) - b * (Y - f)) / det, (-d * (X - c) + a * (Y - f)) / det];
   }
 
   // Point dans un anneau plat [u0, v0, u1, v1, …].
@@ -88,179 +94,199 @@
     if (cur) out.push(cur);
     return out;
   }
+  const pairsOf = (xy) => { const pts = []; for (let i = 0; i < xy.length; i += 2) pts.push([xy[i], xy[i + 1]]); return pts; };
 
-  // Sommet le plus proche du curseur, à moins de tol pixels (tableaux plats [lat, lng, …]).
-  function snap(m, ll, sources, tol = SNAP_PX) {
-    const eps = m.options.crs === L.CRS.Simple ? 1 : 1e-5;
-    const p0 = m.project(ll);
-    const ky = Math.abs(m.project([ll.lat + eps, ll.lng]).y - p0.y) / eps;
-    const kx = Math.abs(m.project([ll.lat, ll.lng + eps]).x - p0.x) / eps;
-    let best = tol * tol, arr = null, idx = -1;
-    for (const a of sources) {
-      if (!a) continue;
-      for (let i = 0; i < a.length; i += 2) {
-        const dy = (a[i] - ll.lat) * ky, dx = (a[i + 1] - ll.lng) * kx;
-        const d = dx * dx + dy * dy;
-        if (d < best) { best = d; arr = a; idx = i; }
-      }
-    }
-    return arr ? L.latLng(arr[idx], arr[idx + 1]) : null;
-  }
-  const pxDist = (m, a, b) => m.latLngToContainerPoint(a).distanceTo(m.latLngToContainerPoint(b));
+  // Accrochage des clics (points de calage) : sommets à moins de SNAP_PX pixels.
+  const tolOf = (m) => SNAP_PX * m.getView().getResolution();
+  const snapPlan = (c) => (P.plan && P.plan.dxf ? snapVertex(c, [P.planSnap], tolOf(planMap)) : null);
+  const snapExisting = (c) => snapVertex(c, [P.existSnap], tolOf(calMap));
 
-  function flatSnap(rings) {
-    const n = rings.reduce((s, r) => s + r.length, 0);
-    const out = new Float64Array(n);
-    let k = 0;
-    rings.forEach((r) => { out.set(r, k); k += r.length; });
-    return out;
-  }
-
-  const snapPlan = (ll) => (P.plan && P.plan.dxf ? snap(planMap, ll, [P.planSnap]) : null);
-  const snapExisting = (ll) => snap(calMap, ll, [P.existSnap]);
-  function snapDraw(ll, except = null) {
-    const proj = flatSnap(P.projects.filter((p) => p !== except).map((p) => p.ring.flat()));
-    return snap(calMap, ll, [P.dxfMapSnap, P.existSnap, proj]);
-  }
-
-  // ---------- Plan affiché sur la carte (image PDF transformée par CSS) ----------
-
-  const PlanImage = L.Layer.extend({
-    options: { pane: "plan" },
-    initialize(url, w, h) { this._url = url; this._w = w; this._h = h; },
-    onAdd(m) {
-      this._img = L.DomUtil.create("img", "cal-plan-img leaflet-image-layer leaflet-zoom-hide");
-      this._img.src = this._url;
-      this._img.alt = "";
-      this._img.draggable = false;
-      this.getPane().appendChild(this._img);
-      m.on("zoom viewreset moveend", this.update, this);
-      this.update();
-    },
-    onRemove(m) {
-      this._img.remove();
-      m.off("zoom viewreset moveend", this.update, this);
-    },
-    update() {
-      const m = this._map, A = P.fit && P.fit.affine_ll;
-      if (!m || !A) return;
-      const origin = m.getPixelOrigin();
-      const pt = (x, y) => m.project(toLL(A, x, y)).subtract(origin);
-      const o = pt(0, 0), u = pt(this._w, 0), v = pt(0, -this._h);
-      const w = this._w, h = this._h;
-      Object.assign(this._img.style, {
-        width: `${w}px`, height: `${h}px`,
-        transform: `matrix(${(u.x - o.x) / w},${(u.y - o.y) / w},${(v.x - o.x) / h},${(v.y - o.y) / h},${o.x},${o.y})`,
-      });
-      // Rognage : rectangle en coordonnées plan -> marges en pixels de l'image.
-      if (P.crop) {
-        const [x0, y0, x1, y1] = P.crop, c = (v1) => Math.max(0, v1);
-        this._img.style.clipPath = `inset(${c(-y1)}px ${c(w - x1)}px ${c(h + y0)}px ${c(x0)}px)`;
-      } else {
-        this._img.style.clipPath = "";
-      }
-    },
-  });
+  // Carte de l'éditeur <-> [lat, lng] (les saisies sont gardées en WGS84).
+  let calCode = null;
+  const llToView = ([lat, lng]) => ol.proj.fromLonLat([lng, lat], calCode);
+  const viewToLl = (c) => { const [lng, lat] = ol.proj.toLonLat(c, calCode); return [lat, lng]; };
 
   // ---------- Cartes de l'éditeur ----------
 
+  let planMap, calMap;
+  const planImage = new ol.layer.Image({ zIndex: 0, visible: false });
+  const planDxf = new ol.layer.VectorImage({ zIndex: 0, source: new ol.source.Vector(), style: new ol.style.Style({ stroke: stroke("#1d2330", 1) }) });
+  const cropSource = new ol.source.Vector();
+  const planPairs = new ol.source.Vector(), mapPairs = new ol.source.Vector();
+  const planSnapMk = new ol.Feature(), mapSnapMk = new ol.Feature();
+  const existingSource = new ol.source.Vector();
+  const dxfMapSource = new ol.source.Vector();
+  const projSource = new ol.source.Vector();
+  const selection = new ol.Collection();       // emprise projetée en cours de modification
+  const otherProjects = new ol.Collection();   // accrochage : les autres emprises projetées
+  let overlaySource, overlayLayer, dxfMapLayer, drawProj = null, drawCrop = null, snaps = [];
+
+  function pairStyle(f) {
+    const color = "#ff3b30";
+    return [
+      new ol.style.Style({
+        image: new ol.style.Circle({ radius: 8, stroke: stroke(color, 2, f.get("pending") ? [3, 3] : undefined), fill: fill("rgba(255, 255, 255, 0.35)") }),
+        text: new ol.style.Text({
+          text: String(f.get("n")), offsetX: 13, offsetY: -12, font: "bold 12px system-ui, 'Segoe UI', sans-serif",
+          fill: fill(color), stroke: stroke("#fff", 3),
+        }),
+      }),
+      new ol.style.Style({ image: new ol.style.Circle({ radius: 1.5, fill: fill(color) }) }),
+    ];
+  }
+
+  function projectStyle(f) {
+    const pr = f.get("pr"), s = pr === P.selected ? STYLE.selected : STYLE.project;
+    return [
+      new ol.style.Style({ stroke: s.stroke, fill: s.fill }),
+      new ol.style.Style({
+        geometry: (g) => g.getGeometry().getInteriorPoint(),
+        text: new ol.style.Text({
+          text: `${pr.nom}\n${fmt(pr.hauteur, 1)} m`, font: "600 12px system-ui, 'Segoe UI', sans-serif",
+          fill: fill("#3b0764"), stroke: stroke("#fff", 3), overflow: true,
+        }),
+      }),
+    ];
+  }
+
   function initMaps() {
     if (calMap) return;
-    planMap = L.map("cal-plan", {
-      crs: L.CRS.Simple, minZoom: -20, maxZoom: 10, zoomSnap: 0.25, zoomDelta: 0.5, attributionControl: false,
-      doubleClickZoom: false,
+    planMap = new ol.Map({
+      target: "cal-plan",
+      layers: [
+        planImage, planDxf,
+        new ol.layer.Vector({ source: cropSource, style: STYLE.crop, zIndex: 5 }),
+        new ol.layer.Vector({ source: planPairs, style: pairStyle, zIndex: 10 }),
+        new ol.layer.Vector({ source: new ol.source.Vector({ features: [planSnapMk] }), style: STYLE.snap, zIndex: 11 }),
+      ],
+      controls: ol.control.defaults.defaults({ attribution: false, rotate: false }),
+      interactions: ol.interaction.defaults.defaults({ doubleClickZoom: false }),
     });
-    planRenderer = L.canvas({ padding: 0.3 });
-    calMap = L.map("cal-map", { maxZoom: 22, zoomSnap: 0.5, doubleClickZoom: false });
-    const osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 22, maxNativeZoom: 19, attribution: "© contributeurs OpenStreetMap",
+
+    const { osm, ortho } = baseLayers();
+    ortho.setVisible(true);
+    osm.setVisible(false);
+    overlaySource = new ol.source.ImageCanvas({ canvasFunction: drawOverlay, ratio: 1 });
+    overlayLayer = new ol.layer.Image({ source: overlaySource, zIndex: 20, className: "cal-plan-layer" });
+    dxfMapLayer = new ol.layer.VectorImage({
+      source: dxfMapSource, zIndex: 21, className: "cal-plan-layer", style: new ol.style.Style({ stroke: stroke(DXF_COLOR, 1.2) }),
     });
-    const ortho = L.tileLayer(
-      "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-      { maxZoom: 22, maxNativeZoom: 19, attribution: "Imagerie © Esri" }).addTo(calMap);
-    L.control.layers({ "Plan (OSM)": osm, "Imagerie": ortho }).addTo(calMap);
-    L.control.scale({ imperial: false }).addTo(calMap);
-    const pane = calMap.createPane("plan");
-    pane.style.zIndex = 350;
-    pane.style.pointerEvents = "none";
-    dxfMapRenderer = L.canvas({ pane: "plan", padding: 0.3 });
-    calMap.createPane("proj").style.zIndex = 420; // emprises projetées au-dessus des existantes
-    projGroup = L.featureGroup().addTo(calMap);
-    const mk = { radius: 7, color: "#ff3b30", weight: 2, fill: false, interactive: false };
-    snapMapMk = L.circleMarker([0, 0], mk);
-    snapPlanMk = L.circleMarker([0, 0], mk);
+    calMap = new ol.Map({
+      target: "cal-map",
+      layers: [
+        osm, ortho,
+        new ol.layer.Vector({ source: existingSource, zIndex: 10, style: (f) => (P.demolis.has(f.get("ID_BAT")) ? STYLE.demolished : STYLE.existing) }),
+        overlayLayer, dxfMapLayer,
+        new ol.layer.Vector({ source: projSource, zIndex: 30, style: projectStyle }),
+        new ol.layer.Vector({ source: mapPairs, style: pairStyle, zIndex: 40 }),
+        new ol.layer.Vector({ source: new ol.source.Vector({ features: [mapSnapMk] }), style: STYLE.snap, zIndex: 41 }),
+      ],
+      view: viewIn(calCode),
+      controls: ol.control.defaults.defaults({ attributionOptions: { collapsible: false } })
+        .extend([new ol.control.ScaleLine({ units: "metric" }), baseSwitch(osm, ortho)]),
+      interactions: ol.interaction.defaults.defaults({ doubleClickZoom: false }),
+    });
+
+    // Points de calage déplaçables ; un point lâché s'accroche, puis le calage est recalculé.
+    const planDrag = new ol.interaction.Translate({ layers: (l) => l.getSource() === planPairs, hitTolerance: 6 });
+    planDrag.on("translateend", (e) => e.features.forEach((f) => {
+      const pair = f.get("pair"), s = snapPlan(f.getGeometry().getCoordinates());
+      if (s) f.getGeometry().setCoordinates(s);
+      pair.p = f.getGeometry().getCoordinates().slice();
+      if (pair.ll) runFit();
+    }));
+    planMap.addInteraction(planDrag);
+    const mapDrag = new ol.interaction.Translate({ layers: (l) => l.getSource() === mapPairs, hitTolerance: 6 });
+    mapDrag.on("translateend", (e) => e.features.forEach((f) => {
+      const pair = f.get("pair"), s = snapExisting(f.getGeometry().getCoordinates());
+      if (s) f.getGeometry().setCoordinates(s);
+      pair.ll = viewToLl(f.getGeometry().getCoordinates());
+      runFit();
+    }));
+    calMap.addInteraction(mapDrag);
+
+    // Emprise projetée sélectionnée : sommets déplaçables, avec accrochage (plan calé, existants, autres projets).
+    const modify = new ol.interaction.Modify({ features: selection });
+    modify.on("modifyend", () => {
+      const pr = P.selected;
+      if (!pr) return;
+      pr.ring = pr.feature.getGeometry().getCoordinates()[0].slice(0, -1).map(viewToLl);
+      changed();
+    });
+    calMap.addInteraction(modify);
+    addSnaps();
+
+    // Rognage : rectangle sur le plan, coins déplaçables.
+    boxEditor(planMap, () => cropSource.getFeatures()[0] || null, updateCrop, () => {});
 
     planMap.on("click", onPlanClick);
-    planMap.on("mousemove", (e) => showSnap(planMap, snapPlanMk, P.mode === "pick-plan" ? snapPlan(e.latlng) : null));
-    planMap.on("pm:create", onCropCreated);
+    planMap.on("pointermove", (e) => {
+      if (e.dragging) return;
+      showSnap(planSnapMk, P.mode === "pick-plan" ? snapPlan(e.coordinate) : null);
+    });
     calMap.on("click", onMapClick);
-    calMap.on("dblclick", () => { if (P.mode === "draw") drawFinish(); });
-    calMap.on("mousemove", onMapMove);
-    P.projects.forEach(drawProject);
+    calMap.on("pointermove", (e) => {
+      if (e.dragging) return;
+      showSnap(mapSnapMk, P.mode === "pick-map" ? snapExisting(e.coordinate) : null);
+    });
     applyOverlayStyle();
   }
 
-  function showSnap(m, mk, ll) {
-    if (ll) { mk.setLatLng(ll); if (!m.hasLayer(mk)) mk.addTo(m); }
-    else if (m.hasLayer(mk)) mk.remove();
+  // Accrochage OpenLayers (tracé et modification des emprises) : à ajouter après les interactions concernées.
+  function addSnaps() {
+    snaps.forEach((s) => calMap.removeInteraction(s));
+    snaps = [
+      new ol.interaction.Snap({ source: dxfMapSource, pixelTolerance: SNAP_PX }),
+      new ol.interaction.Snap({ source: existingSource, pixelTolerance: SNAP_PX }),
+      new ol.interaction.Snap({ features: otherProjects, pixelTolerance: SNAP_PX }),
+    ];
+    snaps.forEach((s) => calMap.addInteraction(s));
+  }
+  function refreshOtherProjects() {
+    otherProjects.clear();
+    P.projects.forEach((p) => { if (p !== P.selected && p.feature) otherProjects.push(p.feature); });
   }
 
-  function onMapMove(e) {
-    let s = null;
-    if (P.mode === "pick-map") s = snapExisting(e.latlng);
-    else if (P.mode === "draw") {
-      s = snapDraw(e.latlng);
-      drawMove(s || e.latlng);
-    }
-    showSnap(calMap, snapMapMk, s);
+  function baseSwitch(osm, ortho) {
+    const el = document.createElement("div");
+    el.className = "map-layers ol-unselectable ol-control";
+    el.innerHTML = `<label><input type="radio" name="cal-base" value="osm"> Plan (OSM)</label>
+      <label><input type="radio" name="cal-base" value="ortho" checked> Imagerie</label>`;
+    el.querySelectorAll("input").forEach((i) => {
+      i.onchange = () => { osm.setVisible(i.value === "osm"); ortho.setVisible(i.value === "ortho"); };
+    });
+    return new ol.control.Control({ element: el });
   }
+
+  function showSnap(mk, c) { mk.setGeometry(c ? new ol.geom.Point(c) : undefined); }
 
   // ---------- Emprises existantes (jaune) et démolitions (rouge) ----------
 
   async function loadExisting() {
     P.jobId = job.id;
-    P.existing = [];
     P.existSnap = null;
-    if (existingLayer) existingLayer.remove();
+    existingSource.clear();
     const r = await fetch(`/api/jobs/${job.id}/batiments`);
     const fc = await r.json();
     if (!r.ok) throw new Error(fc.detail || r.statusText);
-    fc.features.forEach((f) => {
-      const g = f.geometry;
-      const polys = g.type === "Polygon" ? [g.coordinates] : g.coordinates;
-      polys.forEach((poly) => {
-        const rings = poly.map((ring) => Float64Array.from(ring.flatMap(([lng, lat]) => [lat, lng])));
-        const o = rings[0];
-        let s = Infinity, w = Infinity, n = -Infinity, e = -Infinity;
-        for (let i = 0; i < o.length; i += 2) {
-          s = Math.min(s, o[i]); n = Math.max(n, o[i]); w = Math.min(w, o[i + 1]); e = Math.max(e, o[i + 1]);
-        }
-        P.existing.push({ id: f.properties.ID_BAT, rings, bb: [s, w, n, e] });
-      });
+    const features = geojson.readFeatures(fc, { featureProjection: calCode });
+    existingSource.addFeatures(features);
+    const rings = [];
+    features.forEach((f) => {
+      const g = f.getGeometry();
+      (g.getType() === "Polygon" ? [g.getCoordinates()] : g.getCoordinates()).forEach((poly) => rings.push(...poly));
     });
-    P.existSnap = flatSnap(P.existing.flatMap((b) => b.rings));
-    existingLayer = L.geoJSON(fc, {
-      renderer: L.canvas({ padding: 0.3 }), interactive: false,
-      style: (f) => (P.demolis.has(f.properties.ID_BAT) ? STYLE.demolished : STYLE.existing),
-    }).addTo(calMap);
+    P.existSnap = flatCoords(rings);
   }
 
-  function existingAt(ll) {
-    return P.existing.find((b) => ll.lat >= b.bb[0] && ll.lat <= b.bb[2] && ll.lng >= b.bb[1] && ll.lng <= b.bb[3]
-      && inRing(b.rings[0], ll.lat, ll.lng) && !b.rings.slice(1).some((h) => inRing(h, ll.lat, ll.lng)));
-  }
+  const existingAt = (c) => existingSource.getFeaturesAtCoordinate(c)[0] || null;
 
-  function restyleExisting() {
-    if (existingLayer) {
-      existingLayer.setStyle((f) => (P.demolis.has(f.properties.ID_BAT) ? STYLE.demolished : STYLE.existing));
-    }
-  }
-
-  function toggleDemolish(ll) {
-    const b = existingAt(ll);
-    if (!b) { message("Aucun bâtiment existant sous le clic.", "warn", 2500); return; }
-    if (P.demolis.has(b.id)) P.demolis.delete(b.id); else P.demolis.add(b.id);
-    restyleExisting();
+  function toggleDemolish(c) {
+    const f = existingAt(c);
+    if (!f) { message("Aucun bâtiment existant sous le clic.", "warn", 2500); return; }
+    const id = f.get("ID_BAT");
+    if (P.demolis.has(id)) P.demolis.delete(id); else P.demolis.add(id);
+    existingSource.changed();
     changed();
   }
 
@@ -306,22 +332,36 @@
   }
   const visibleLines = () => P.plan.dxf.lines.filter((l) => !P.plan.dxf.hidden.has(l.layer));
 
-  function resetPlan() {
-    cancelMode();
-    P.pairs.forEach((p) => { p.pm.remove(); p.mm.remove(); });
+  function clearPairs() {
+    planPairs.clear();
+    mapPairs.clear();
     P.pairs = [];
     P.fit = P.fitInfo = null;
+  }
+
+  function resetPlan() {
+    cancelMode();
+    clearPairs();
+    cropSource.clear();
     P.crop = null;
-    [planLayer, cropLayer, dxfMapLayer, mapImg].forEach((l) => { if (l) l.remove(); });
-    planLayer = cropLayer = dxfMapLayer = mapImg = null;
-    P.planSnap = P.dxfMapSnap = null;
+    planImage.setVisible(false);
+    planDxf.setSource(new ol.source.Vector());
+    dxfMapSource.clear();
+    P.planSnap = null;
     P.plan = null;
+    refreshOverlay();
+  }
+
+  // Le plan est affiché dans ses propres unités : pixels de l'image (y vers le haut, de -h à 0) ou unités du DXF.
+  function planView(extent) {
+    const projection = new ol.proj.Projection({ code: `plan-${Date.now()}`, units: "pixels", extent });
+    planMap.setView(new ol.View({ projection, constrainResolution: false, maxZoom: 40 }));
+    planMap.getView().fit(extent, { padding: [20, 20, 20, 20] });
+    return projection;
   }
 
   async function showPlan() {
     const plan = P.plan;
-    [planLayer, mapImg].forEach((l) => { if (l) l.remove(); });
-    let bounds;
     if (plan.pdf) {
       const pdf = plan.pdf, pg = pdf.pages[pdf.page];
       message(`Rendu de la page ${pdf.page + 1}…`, "muted");
@@ -332,17 +372,17 @@
         im.onerror = () => reject(new Error("rendu de la page impossible (plan expiré ?)"));
         im.src = pdf.url;
       });
-      Object.assign(pdf, { w: img.naturalWidth, h: img.naturalHeight, dpi: pg.dpi });
-      bounds = [[-pdf.h, 0], [0, pdf.w]];
-      planLayer = L.imageOverlay(pdf.url, bounds).addTo(planMap);
-      mapImg = new PlanImage(pdf.url, pdf.w, pdf.h);
+      Object.assign(pdf, { w: img.naturalWidth, h: img.naturalHeight, dpi: pg.dpi, img });
+      const extent = [0, -pdf.h, pdf.w, 0];
+      const projection = planView(extent);
+      planDxf.setSource(new ol.source.Vector());
+      planImage.setSource(new ol.source.ImageStatic({ url: pdf.url, imageExtent: extent, projection }));
+      planImage.setVisible(true);
     } else {
+      planImage.setVisible(false);
+      planView(plan.dxf.bbox);
       drawDxfPlan();
-      const [x0, y0, x1, y1] = plan.dxf.bbox;
-      bounds = [[y0, x0], [y1, x1]];
     }
-    planMap.invalidateSize();
-    planMap.fitBounds(bounds, { padding: [20, 20] });
     renderPlanControls();
     renderPairs();
     renderStats();
@@ -351,20 +391,9 @@
   }
 
   function drawDxfPlan() {
-    if (planLayer) planLayer.remove();
     const vis = visibleLines();
-    const latlngs = vis.map((l) => {
-      const pts = [];
-      for (let i = 0; i < l.xy.length; i += 2) pts.push([l.xy[i + 1], l.xy[i]]);
-      return pts;
-    });
-    planLayer = L.polyline(latlngs, { renderer: planRenderer, color: "#1d2330", weight: 1, interactive: false })
-      .addTo(planMap);
-    P.planSnap = flatSnap(vis.map((l) => {
-      const a = new Float64Array(l.xy.length);
-      for (let i = 0; i < l.xy.length; i += 2) { a[i] = l.xy[i + 1]; a[i + 1] = l.xy[i]; }
-      return a;
-    }));
+    planDxf.setSource(new ol.source.Vector({ features: [new ol.Feature(new ol.geom.MultiLineString(vis.map((l) => pairsOf(l.xy))))] }));
+    P.planSnap = flatCoords(vis.map((l) => pairsOf(l.xy)));
   }
 
   function renderPlanControls() {
@@ -394,60 +423,42 @@
 
   // ---------- Rognage ----------
 
-  function onCropCreated(e) {
-    if (P.mode !== "crop") { e.layer.remove(); return; }
-    if (cropLayer) cropLayer.remove();
-    cropLayer = e.layer;
-    cropLayer.setStyle({ color: "#ff3b30", weight: 2, dashArray: "6 4", fill: false });
-    cropLayer.pm.enable({ allowSelfIntersection: false, snappable: false });
-    cropLayer.on("pm:edit", updateCrop);
+  function onCropDrawn(e) {
+    cropSource.clear();
+    cropSource.addFeature(e.feature);
     updateCrop();
     setMode(null);
   }
   function updateCrop() {
-    const b = cropLayer.getBounds();
-    P.crop = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+    const f = cropSource.getFeatures()[0];
+    P.crop = f ? f.getGeometry().getExtent() : null;
     refreshOverlay();
   }
 
   // ---------- Points de calage ----------
 
-  function pointIcon(n, pending = false) {
-    return L.divIcon({
-      className: `cal-pt${pending ? " pending" : ""}`, iconSize: [18, 18], iconAnchor: [9, 9],
-      html: `<i></i><b>${n}</b>`,
-    });
-  }
-
-  function pairMarker(m, ll, n, pair, side) {
-    const mk = L.marker(ll, { icon: pointIcon(n, side === "plan"), draggable: true, autoPan: true, keyboard: false })
-      .addTo(m);
-    mk.on("dragend", () => {
-      const s = side === "plan" ? snapPlan(mk.getLatLng()) : snapExisting(mk.getLatLng());
-      if (s) mk.setLatLng(s);
-      const ll2 = mk.getLatLng();
-      if (side === "plan") pair.p = [ll2.lng, ll2.lat]; else pair.ll = [ll2.lat, ll2.lng];
-      if (pair.ll) runFit();
-    });
-    return mk;
+  function pairFeature(source, coord, n, pair, pending) {
+    const f = new ol.Feature({ geometry: new ol.geom.Point(coord), n, pending, pair });
+    source.addFeature(f);
+    return f;
   }
 
   function onPlanClick(e) {
     if (P.mode !== "pick-plan") return;
-    const ll = snapPlan(e.latlng) || e.latlng;
-    const pair = { p: [ll.lng, ll.lat], ll: null };
-    pair.pm = pairMarker(planMap, ll, P.pairs.length + 1, pair, "plan");
+    const c = snapPlan(e.coordinate) || e.coordinate;
+    const pair = { p: c.slice(), ll: null };
+    pair.pf = pairFeature(planPairs, c, P.pairs.length + 1, pair, true);
     P.pending = pair;
     setMode("pick-map");
   }
 
-  function completePair(latlng) {
-    const ll = snapExisting(latlng) || latlng;
+  function completePair(coord) {
+    const c = snapExisting(coord) || coord;
     const pair = P.pending;
     P.pending = null;
-    pair.ll = [ll.lat, ll.lng];
-    pair.pm.setIcon(pointIcon(P.pairs.length + 1));
-    pair.mm = pairMarker(calMap, ll, P.pairs.length + 1, pair, "map");
+    pair.ll = viewToLl(c);
+    pair.pf.set("pending", false);
+    pair.mf = pairFeature(mapPairs, c, P.pairs.length + 1, pair, false);
     P.pairs.push(pair);
     setMode(null);
     renderPairs();
@@ -456,9 +467,9 @@
 
   function removePair(i) {
     const [p] = P.pairs.splice(i, 1);
-    p.pm.remove();
-    p.mm.remove();
-    P.pairs.forEach((q, k) => { q.pm.setIcon(pointIcon(k + 1)); q.mm.setIcon(pointIcon(k + 1)); });
+    planPairs.removeFeature(p.pf);
+    mapPairs.removeFeature(p.mf);
+    P.pairs.forEach((q, k) => { q.pf.set("n", k + 1); q.mf.set("n", k + 1); });
     renderPairs();
     runFit();
   }
@@ -477,6 +488,7 @@
           body: JSON.stringify({
             pairs: P.pairs.map((p) => [p.p[0], p.p[1], p.ll[0], p.ll[1]]),
             method: $("cal-method").value, bbox: planBBox(), unit_m: planUnit(),
+            view_epsg: Number(calCode.split(":")[1]),
           }),
         });
         info = await r.json();
@@ -545,92 +557,78 @@
 
   function applyOverlayStyle() {
     if (!calMap) return;
-    const pane = calMap.getPane("plan");
-    pane.style.display = $("cal-show").checked ? "" : "none";
-    pane.style.opacity = Number($("cal-opacity").value) / 100;
-    pane.style.mixBlendMode = $("cal-multiply").checked ? "multiply" : "normal";
+    const show = $("cal-show").checked, opacity = Number($("cal-opacity").value) / 100;
+    [overlayLayer, dxfMapLayer].forEach((l) => { l.setVisible(show); l.setOpacity(opacity); });
+    $("cal-map-wrap").classList.toggle("multiply", $("cal-multiply").checked);
     $("cal-opacity-val").textContent = `${$("cal-opacity").value} %`;
+  }
+
+  // Image du plan PDF déformée par l'affine de calage (plan -> carte), rognée, dessinée à chaque rendu.
+  function drawOverlay(extent, resolution, pixelRatio, size) {
+    const canvas = document.createElement("canvas");
+    canvas.width = size[0];
+    canvas.height = size[1];
+    const A = P.fit && P.fit.affine_view, pdf = P.plan && P.plan.pdf;
+    if (!A || !pdf || !pdf.img) return canvas;
+    const ctx = canvas.getContext("2d");
+    const k = size[0] / (extent[2] - extent[0]);
+    // Pixel (i, j) de l'image = point (i, -j) du plan.
+    ctx.setTransform(k * A[0], -k * A[3], -k * A[1], k * A[4], k * (A[2] - extent[0]), k * (extent[3] - A[5]));
+    if (P.crop) {
+      const [x0, y0, x1, y1] = P.crop;
+      ctx.beginPath();
+      ctx.rect(x0, -y1, x1 - x0, y1 - y0);
+      ctx.clip();
+    }
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(pdf.img, 0, 0);
+    return canvas;
   }
 
   function refreshOverlay() {
     if (!calMap) return;
-    const A = P.fit && P.fit.affine_ll;
-    if (dxfMapLayer) { dxfMapLayer.remove(); dxfMapLayer = null; }
-    P.dxfMapSnap = null;
-    if (!A || !P.plan) {
-      if (mapImg) mapImg.remove();
-      return;
-    }
-    if (P.plan.pdf) {
-      if (!calMap.hasLayer(mapImg)) mapImg.addTo(calMap);
-      mapImg.update();
-      return;
-    }
-    const latlngs = [], snaps = [];
+    const A = P.fit && P.fit.affine_view;
+    overlaySource.changed();
+    dxfMapSource.clear();
+    if (!A || !P.plan || !P.plan.dxf) return;
+    const lines = [];
     visibleLines().forEach((l) => {
       (P.crop ? clipLine(l.xy, P.crop) : [l.xy]).forEach((xy) => {
-        const pts = [], flat = new Float64Array(xy.length);
-        for (let i = 0; i < xy.length; i += 2) {
-          const ll = toLL(A, xy[i], xy[i + 1]);
-          pts.push(ll);
-          flat[i] = ll[0];
-          flat[i + 1] = ll[1];
-        }
-        latlngs.push(pts);
-        snaps.push(flat);
+        const pts = [];
+        for (let i = 0; i < xy.length; i += 2) pts.push(toView(A, xy[i], xy[i + 1]));
+        lines.push(pts);
       });
     });
-    P.dxfMapSnap = flatSnap(snaps);
-    dxfMapLayer = L.polyline(latlngs, { renderer: dxfMapRenderer, color: DXF_COLOR, weight: 1.2, interactive: false })
-      .addTo(calMap);
+    dxfMapSource.addFeature(new ol.Feature(new ol.geom.MultiLineString(lines)));
   }
 
   // ---------- Tracé d'une emprise ----------
 
-  const D = { pts: [], line: null, guide: null };
-
   function drawStart() {
-    D.pts = [];
-    D.line = L.polyline([], { color: VIOLET, weight: 2, pane: "proj", interactive: false }).addTo(calMap);
-    D.guide = L.polyline([], { color: VIOLET, weight: 1.5, dashArray: "5 5", pane: "proj", interactive: false })
-      .addTo(calMap);
-  }
-  function drawClick(latlng) {
-    const s = snapDraw(latlng) || latlng;
-    if (D.pts.length >= 3 && pxDist(calMap, s, D.pts[0]) < SNAP_PX) { drawFinish(); return; }
-    if (D.pts.length && pxDist(calMap, s, D.pts[D.pts.length - 1]) < 4) return; // clics du double-clic
-    D.pts.push(s);
-    D.line.setLatLngs(D.pts);
-  }
-  function drawMove(ll) {
-    if (!D.pts.length) return;
-    const last = D.pts[D.pts.length - 1];
-    D.guide.setLatLngs(D.pts.length >= 2 ? [last, ll, D.pts[0]] : [last, ll]);
-  }
-  function drawUndo() {
-    D.pts.pop();
-    D.line.setLatLngs(D.pts);
-    D.guide.setLatLngs([]);
+    otherProjects.clear();
+    P.projects.forEach((p) => { if (p.feature) otherProjects.push(p.feature); });
+    drawProj = new ol.interaction.Draw({ type: "Polygon", style: STYLE.draw });
+    drawProj.on("drawend", (e) => {
+      const ring = e.feature.getGeometry().getCoordinates()[0].slice(0, -1).map(viewToLl);
+      setTimeout(() => {
+        setMode(null);
+        if (ring.length >= 3) addProject(ring);
+        else message("Il faut au moins 3 sommets.", "warn", 2500);
+      });
+    });
+    calMap.addInteraction(drawProj);
+    addSnaps();
   }
   function drawCleanup() {
-    if (D.line) D.line.remove();
-    if (D.guide) D.guide.remove();
-    D.pts = [];
-    D.line = D.guide = null;
-  }
-  function drawFinish() {
-    const ring = D.pts.map((p) => [p.lat, p.lng]);
-    drawCleanup();
-    setMode(null);
-    if (ring.length >= 3) addProject(ring);
-    else message("Il faut au moins 3 sommets.", "warn", 2500);
+    if (drawProj) calMap.removeInteraction(drawProj);
+    drawProj = null;
   }
 
   // Prend une polyligne fermée du DXF sous le clic (la plus petite qui contient le point).
-  function takeAt(latlng) {
-    const A = P.fit && P.fit.affine_ll;
+  function takeAt(coord) {
+    const A = P.fit && P.fit.affine_view;
     if (!A) return;
-    const [x, y] = toPlan(A, latlng.lat, latlng.lng);
+    const [x, y] = toPlan(A, coord[0], coord[1]);
     const c = P.crop;
     let best = null;
     visibleLines().forEach((l) => {
@@ -641,7 +639,7 @@
     });
     if (!best) { message("Aucune polyligne fermée du DXF sous le clic.", "warn", 2500); return; }
     const ring = [];
-    for (let i = 0; i < best.xy.length - 2; i += 2) ring.push(toLL(A, best.xy[i], best.xy[i + 1]));
+    for (let i = 0; i < best.xy.length - 2; i += 2) ring.push(viewToLl(toView(A, best.xy[i], best.xy[i + 1])));
     addProject(ring);
     setMode("take");
   }
@@ -663,48 +661,26 @@
   }
 
   function drawProject(pr) {
-    if (!projGroup) return;
-    pr.layer = L.polygon(pr.ring, { ...STYLE.project, pane: "proj", interactive: false }).addTo(projGroup);
-    pr.layer.bindTooltip("", { permanent: true, direction: "center", className: "proj-label" });
-    labelProject(pr);
-    pr.layer.on("pm:edit", () => onProjectEdited(pr));
+    if (!calMap) return;
+    pr.feature = new ol.Feature({ geometry: new ol.geom.Polygon([[...pr.ring, pr.ring[0]].map(llToView)]), pr });
+    projSource.addFeature(pr.feature);
   }
   function labelProject(pr) {
-    if (pr.layer) pr.layer.setTooltipContent(`${escapeHtml(pr.nom)}<br>${fmt(pr.hauteur, 1)} m`);
+    if (pr.feature) pr.feature.changed();
   }
 
-  // Après déplacement d'un sommet : accrochage aux sommets voisins (DXF, existants, autres projets).
-  function onProjectEdited(pr) {
-    let moved = false;
-    const ring = pr.layer.getLatLngs()[0].map((v) => {
-      const s = snapDraw(v, pr);
-      if (s && !s.equals(v)) { moved = true; return s; }
-      return v;
-    });
-    if (moved) {
-      pr.layer.setLatLngs(ring);
-      pr.layer.pm.disable();
-      pr.layer.pm.enable({ draggable: false, snappable: false, allowSelfIntersection: false });
-    }
-    pr.ring = ring.map((v) => [v.lat, v.lng]);
-    changed();
-  }
-
-  function projectAt(ll) {
-    return P.projects.find((p) => inRing(Float64Array.from(p.ring.flat()), ll.lat, ll.lng));
-  }
+  const projectAt = (c) => { const f = projSource.getFeaturesAtCoordinate(c)[0]; return f ? f.get("pr") : null; };
 
   function select(pr) {
     const prev = P.selected;
-    if (prev && prev.layer) {
-      prev.layer.pm.disable();
-      prev.layer.setStyle(STYLE.project);
-    }
     P.selected = pr;
-    if (pr && pr.layer) {
-      pr.layer.setStyle(STYLE.selected);
-      pr.layer.pm.enable({ draggable: false, snappable: false, allowSelfIntersection: false });
+    selection.clear();
+    if (prev && prev.feature) prev.feature.changed();
+    if (pr && pr.feature) {
+      selection.push(pr.feature);
+      pr.feature.changed();
     }
+    refreshOtherProjects();
     const box = $("cal-edit");
     box.classList.toggle("hidden", !pr);
     if (pr) {
@@ -716,7 +692,7 @@
   }
 
   function deleteProject(pr) {
-    if (pr.layer) pr.layer.remove();
+    if (pr.feature) projSource.removeFeature(pr.feature);
     P.projects = P.projects.filter((p) => p !== pr);
     if (P.selected === pr) select(null);
     changed();
@@ -746,9 +722,7 @@
   }
 
   function updateMainLayer() {
-    if (!mainGroup) mainGroup = L.layerGroup().addTo(map);
-    mainGroup.clearLayers();
-    P.projects.forEach((p) => L.polygon(p.ring, { ...STYLE.project, interactive: false }).addTo(mainGroup));
+    setMainProjects(P.projects.map((p) => p.ring));
   }
 
   // ---------- Synchronisation avec l'extraction (aperçu 3D et ZIP) ----------
@@ -819,15 +793,16 @@
   function setMode(mode) {
     if (P.mode === "draw" && mode !== "draw") drawCleanup();
     if (mode === "draw" && P.mode !== "draw") drawStart();
+    if (P.mode === "crop" && mode !== "crop" && drawCrop) { planMap.removeInteraction(drawCrop); drawCrop = null; }
     P.mode = mode;
     const btn = { "pick-plan": "cal-add", "pick-map": "cal-add", crop: "cal-crop", draw: "cal-draw", take: "cal-take", demol: "cal-demol" };
     Object.values(btn).forEach((id) => $(id).classList.remove("active"));
     if (btn[mode]) $(btn[mode]).classList.add("active");
-    $("cal-plan-wrap").classList.toggle("cross", mode === "pick-plan");
+    $("cal-plan-wrap").classList.toggle("cross", mode === "pick-plan" || mode === "crop");
     $("cal-map-wrap").classList.toggle("cross", ["pick-map", "draw", "take", "demol"].includes(mode));
     if (calMap) {
-      if (mode !== "pick-plan") showSnap(planMap, snapPlanMk, null);
-      if (!["pick-map", "draw"].includes(mode)) showSnap(calMap, snapMapMk, null);
+      if (mode !== "pick-plan") showSnap(planSnapMk, null);
+      if (mode !== "pick-map") showSnap(mapSnapMk, null);
     }
     const n = P.pairs.length + 1;
     const texts = {
@@ -836,8 +811,8 @@
       "pick-map": `Point ${n} : cliquez le MÊME point sur la CARTE (à droite). Accrochage aux coins des bâtiments `
         + "existants (jaune). Échap : annuler.",
       crop: "Rognage : tracez sur le plan (à gauche) un rectangle autour de la partie utile (sans cartouche ni légende).",
-      draw: "Tracé : cliquez les sommets (accrochage au plan et aux bâtiments). Double-clic ou clic sur le premier "
-        + "sommet pour fermer. Retour arrière : dernier sommet. Échap : abandon.",
+      draw: "Tracé : cliquez les sommets (accrochage aux sommets et aux côtés du plan et des bâtiments). Double-clic ou clic "
+        + "sur le premier sommet pour fermer. Retour arrière : dernier sommet. Échap : abandon.",
       take: "Cliquez à l'intérieur d'une polyligne fermée du DXF pour en faire une emprise projetée. Échap : terminer.",
       demol: "Cliquez un bâtiment existant pour le marquer démoli (rouge) ou l'annuler. Échap : terminer.",
     };
@@ -851,8 +826,7 @@
   }
 
   function cancelMode() {
-    if (P.pending) { P.pending.pm.remove(); P.pending = null; renderPairs(); }
-    if (planMap) planMap.pm.disableDraw();
+    if (P.pending) { planPairs.removeFeature(P.pending.pf); P.pending = null; renderPairs(); }
     setMode(null);
   }
 
@@ -861,30 +835,49 @@
     cancelMode();
     if (mode === "take" && !P.fit) { message("Calez d'abord le plan (points de calage).", "warn", 2500); return; }
     if (mode === "crop") {
-      planMap.pm.enableDraw("Rectangle", {
-        snappable: false, pathOptions: { color: "#ff3b30", weight: 2, dashArray: "6 4", fill: false },
-      });
+      drawCrop = new ol.interaction.Draw({ type: "Circle", geometryFunction: ol.interaction.Draw.createBox(), style: STYLE.crop });
+      drawCrop.on("drawend", onCropDrawn);
+      planMap.addInteraction(drawCrop);
     }
     setMode(mode);
   }
 
   function onMapClick(e) {
     switch (P.mode) {
-      case "pick-map": completePair(e.latlng); break;
-      case "draw": drawClick(e.latlng); break;
-      case "take": takeAt(e.latlng); break;
-      case "demol": toggleDemolish(e.latlng); break;
-      case null: select(projectAt(e.latlng) || null); break;
+      case "pick-map": completePair(e.coordinate); break;
+      case "take": takeAt(e.coordinate); break;
+      case "demol": toggleDemolish(e.coordinate); break;
+      case null: select(projectAt(e.coordinate)); break;
       default: break;
     }
+  }
+
+  // Carte de l'éditeur dans la projection de l'extraction ; une nouvelle projection redessine toutes les saisies.
+  function useProjection(code) {
+    if (code === calCode) return;
+    calCode = code;
+    if (!calMap) return;
+    calMap.setView(viewIn(code, calMap.getView()));
+    existingSource.clear();
+    P.existSnap = null;
+    P.jobId = null;
+    projSource.clear();
+    P.projects.forEach(drawProject);
+    if (P.selected) select(P.selected);
+    mapPairs.clear();
+    P.pairs.forEach((p, i) => { p.mf = pairFeature(mapPairs, llToView(p.ll), i + 1, p, false); });
+    P.fit = null;
+    refreshOverlay();
+    runFit();
   }
 
   async function openEditor() {
     if (!job) return;
     $("calage").classList.remove("hidden");
+    useProjection(job.code);
     initMaps();
-    planMap.invalidateSize();
-    calMap.invalidateSize();
+    planMap.updateSize();
+    calMap.updateSize();
     try {
       if (P.jobId !== job.id) await loadExisting();
     } catch (err) {
@@ -892,8 +885,8 @@
     }
     if (!P.viewSet) {
       P.viewSet = true;
-      const b = P.projects.length ? projGroup.getBounds() : zone ? zone.getBounds() : map.getBounds();
-      calMap.fitBounds(b, { maxZoom: 18 });
+      const extent = P.projects.length ? projSource.getExtent() : ol.proj.transformExtent(mainBounds(), WGS84, calCode);
+      calMap.getView().fit(extent, { padding: [40, 40, 40, 40], minResolution: 0.3 });
     }
     renderPlanControls();
     renderPairs();
@@ -928,15 +921,13 @@
   $("cal-toggle-plan").onclick = () => {
     const hidden = $("cal-body").classList.toggle("no-plan");
     $("cal-toggle-plan").textContent = hidden ? "Afficher le plan source" : "Masquer le plan source";
-    calMap.invalidateSize();
-    if (!hidden) planMap.invalidateSize();
+    calMap.updateSize();
+    if (!hidden) planMap.updateSize();
   };
   $("cal-page").onchange = async (e) => {
     const plan = P.plan;
-    P.pairs.forEach((p) => { p.pm.remove(); p.mm.remove(); });
-    P.pairs = [];
-    P.fit = P.fitInfo = null;
-    if (cropLayer) { cropLayer.remove(); cropLayer = null; }
+    clearPairs();
+    cropSource.clear();
     P.crop = null;
     plan.pdf.page = Number(e.target.value);
     try { await showPlan(); } catch (err) { message(`Page non affichée : ${err.message}`, "err"); }
@@ -949,7 +940,7 @@
   };
   $("cal-crop").onclick = () => toggleMode("crop");
   $("cal-uncrop").onclick = () => {
-    if (cropLayer) { cropLayer.remove(); cropLayer = null; }
+    cropSource.clear();
     P.crop = null;
     refreshOverlay();
   };
@@ -961,8 +952,8 @@
     const row = e.target.closest("tr[data-i]");
     if (row) {
       const p = P.pairs[Number(row.dataset.i)];
-      planMap.panTo(p.pm.getLatLng());
-      calMap.panTo(p.mm.getLatLng());
+      planMap.getView().animate({ center: p.p, duration: 250 });
+      calMap.getView().animate({ center: llToView(p.ll), duration: 250 });
     }
   };
   ["cal-show", "cal-multiply"].forEach((id) => { $(id).onchange = applyOverlayStyle; });
@@ -972,7 +963,7 @@
   $("cal-demol").onclick = () => toggleMode("demol");
   $("cal-covered").onclick = () => {
     P.covered.forEach((id) => P.demolis.add(id));
-    restyleExisting();
+    existingSource.changed();
     changed();
   };
   $("cal-list").onclick = (e) => {
@@ -980,7 +971,7 @@
     const pr = li && P.projects.find((p) => p.id === li.dataset.id);
     if (!pr) return;
     select(pr);
-    calMap.fitBounds(pr.layer.getBounds(), { maxZoom: 20, padding: [60, 60] });
+    calMap.getView().fit(pr.feature.getGeometry().getExtent(), { padding: [60, 60, 60, 60], minResolution: 0.05, duration: 250 });
   };
   $("pb-nom").oninput = (e) => {
     const pr = P.selected, v = e.target.value.trim();
@@ -1013,8 +1004,8 @@
     if ($("calage").classList.contains("hidden") || $("help").open) return;
     const typing = e.target instanceof Element && e.target.matches("input, select, textarea");
     if (e.key === "Escape") { cancelMode(); e.preventDefault(); }
-    else if (e.key === "Backspace" && P.mode === "draw" && !typing) { drawUndo(); e.preventDefault(); }
-    else if (e.key === "Enter" && P.mode === "draw" && !typing) drawFinish();
+    else if (e.key === "Backspace" && P.mode === "draw" && drawProj && !typing) { drawProj.removeLastPoint(); e.preventDefault(); }
+    else if (e.key === "Enter" && P.mode === "draw" && drawProj && !typing) drawProj.finishDrawing();
   });
 
   summary();

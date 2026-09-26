@@ -2,41 +2,177 @@
 
 const MAX_KM2 = 100;
 const WARN_KM2 = 25;
-const QC_BOUNDS = [[44.99, -79.8], [62.6, -57.1]];
+const QC_BOUNDS = [-79.8, 44.99, -57.1, 62.6];   // ouest, sud, est, nord (degrés)
 
 const $ = (id) => document.getElementById(id);
 
-// ---------- Carte ----------
-const map = L.map("map", { maxBounds: [[40, -90], [66, -50]] }).setView([46.81, -71.22], 13);
-const osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  maxZoom: 19, attribution: "© contributeurs OpenStreetMap",
-}).addTo(map);
-const ortho = L.tileLayer(
-  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-  { maxZoom: 19, attribution: "Imagerie © Esri" });
-const layerControl = L.control.layers({ "Plan (OSM)": osm, "Imagerie": ortho }).addTo(map);
-L.rectangle(QC_BOUNDS, { color: "#888", weight: 1, fill: false, dashArray: "4 4", interactive: false }).addTo(map);
-L.control.scale({ imperial: false }).addTo(map);
+// ---------- Carte (OpenLayers) ----------
+// Affichage en Web Mercator ; la zone est envoyée au serveur en WGS84 (GeoJSON). WGS84, MERC : carto.js.
+const toMerc = (lon, lat) => ol.proj.fromLonLat([lon, lat]);
+const extentMerc = (e) => ol.proj.transformExtent(e, WGS84, MERC);
+const geojson = new ol.format.GeoJSON({ dataProjection: WGS84, featureProjection: MERC });
+const ZONE_COLOR = "#1f5fae";
 
-map.pm.setLang("fr");
-map.pm.setGlobalOptions({ pathOptions: { color: "#1f5fae", weight: 2, fillOpacity: 0.08 } });
+const { osm, ortho } = baseLayers();
+// Cadre du Québec : vue d'ensemble seulement (un grand pointillé redessiné à chaque image freine la carte).
+const qcFrame = new ol.layer.Vector({
+  zIndex: 30, minResolution: 150,
+  source: new ol.source.Vector({ features: [new ol.Feature(ol.geom.Polygon.fromExtent(extentMerc(QC_BOUNDS)))] }),
+  style: new ol.style.Style({ stroke: new ol.style.Stroke({ color: "#888", width: 1, lineDash: [4, 4] }) }),
+});
 
-let zone = null;
+const zoneStyle = [
+  new ol.style.Style({
+    stroke: new ol.style.Stroke({ color: ZONE_COLOR, width: 2 }),
+    fill: new ol.style.Fill({ color: "rgba(31, 95, 174, 0.08)" }),
+  }),
+  new ol.style.Style({   // poignées : sommets déplaçables
+    image: new ol.style.Circle({
+      radius: 5, fill: new ol.style.Fill({ color: "#fff" }), stroke: new ol.style.Stroke({ color: ZONE_COLOR, width: 2 }),
+    }),
+    geometry: (f) => new ol.geom.MultiPoint(f.getGeometry().getCoordinates()[0].slice(0, -1)),
+  }),
+];
+const zoneSource = new ol.source.Vector();
 
-function setZone(layer) {
-  if (zone && zone !== layer) map.removeLayer(zone);
-  zone = layer;
-  zone.on("pm:edit", updateZone);
-  zone.pm.enable({ allowSelfIntersection: false });
+// Bâtiments projetés saisis dans l'éditeur (plan.js), rappelés sur la carte principale.
+const projSource = new ol.source.Vector();
+
+const map = new ol.Map({
+  target: "map",
+  layers: [
+    osm, ortho, qcFrame,
+    new ol.layer.Vector({
+      source: projSource, zIndex: 40,
+      style: new ol.style.Style({
+        stroke: new ol.style.Stroke({ color: "#7c3aed", width: 2 }),
+        fill: new ol.style.Fill({ color: "rgba(124, 58, 237, 0.25)" }),
+      }),
+    }),
+    new ol.layer.Vector({ source: zoneSource, style: zoneStyle, zIndex: 50 }),
+  ],
+  view: new ol.View({ center: toMerc(-71.22, 46.81), zoom: 13, maxZoom: 19, extent: extentMerc([-90, 40, -50, 66]) }),
+  controls: ol.control.defaults.defaults({ attributionOptions: { collapsible: false } })
+    .extend([new ol.control.ScaleLine({ units: "metric" })]),
+});
+
+// Sélecteur de fond de carte et de couches superposées (lidar.js y ajoute les siennes).
+const layerCtl = document.createElement("div");
+layerCtl.className = "map-layers ol-unselectable ol-control";
+layerCtl.innerHTML = `<details>
+    <summary data-tip="Fond de carte et couches d'aide à la saisie de la zone.">Couches</summary>
+    <fieldset><legend>Fond</legend>
+      <label><input type="radio" name="basemap" value="osm" checked> Plan (OSM)</label>
+      <label><input type="radio" name="basemap" value="ortho"> Imagerie</label>
+    </fieldset>
+    <fieldset id="map-overlays"><legend>Superpositions</legend></fieldset>
+  </details>`;
+map.addControl(new ol.control.Control({ element: layerCtl }));
+layerCtl.querySelectorAll("input[name=basemap]").forEach((input) => {
+  input.onchange = () => { osm.setVisible(input.value === "osm"); ortho.setVisible(input.value === "ortho"); };
+});
+function addOverlay(layer, label) {
+  const row = document.createElement("label");
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.checked = layer.getVisible();
+  box.onchange = () => layer.setVisible(box.checked);
+  row.append(box, ` ${label}`);
+  $("map-overlays").append(row);
+}
+
+// Curseur : poignée de rectangle, sinon survol d'une dalle LiDAR (lidar.js).
+let cornerHover = false, tileHover = false;
+function setCursor() {
+  map.getTargetElement().style.cursor = cornerHover ? "move" : tileHover ? "pointer" : "";
+}
+
+// ---------- Zone d'étude : tracé et modification ----------
+let zone = null;          // ol.Feature ; propriété "shape" : "Rectangle" ou "Polygon"
+let drawing = null;       // interaction de tracé en cours
+let drawEndedAt = 0;
+
+// Vrai pendant un tracé et juste après (le clic qui termine le tracé n'ouvre pas de bulle).
+function isDrawing() { return !!drawing || Date.now() - drawEndedAt < 500; }
+
+// Polygone : sommets déplaçables, ajout en tirant un côté, suppression par clic droit ou Alt + clic.
+const editable = new ol.Collection();
+const modify = new ol.interaction.Modify({ features: editable, style: new ol.style.Style({ image: zoneStyle[1].getImage() }) });
+let beforeEdit = null;
+modify.on("modifystart", () => { beforeEdit = zone.getGeometry().clone(); });
+modify.on("modifyend", () => {
+  if (selfIntersects(zone.getGeometry())) {
+    zone.setGeometry(beforeEdit);
+    updateZone().then(() => alertInfo("Le polygone ne doit pas se croiser : modification annulée."));
+    return;
+  }
+  updateZone();
+});
+map.addInteraction(modify);
+map.getViewport().addEventListener("contextmenu", (e) => {
+  if (!zone || zone.get("shape") !== "Polygon" || drawing) return;
+  const pixel = map.getEventPixel(e);
+  const ring = zone.getGeometry().getCoordinates()[0].slice(0, -1);
+  const i = ring.findIndex((c) => {
+    const p = map.getPixelFromCoordinate(c);
+    return Math.hypot(p[0] - pixel[0], p[1] - pixel[1]) <= 8;
+  });
+  if (i < 0) return;
+  e.preventDefault();
+  if (ring.length <= 3) { alertInfo("Un polygone garde au moins 3 sommets."); return; }
+  ring.splice(i, 1);
+  const geom = new ol.geom.Polygon([[...ring, ring[0]]]);
+  if (selfIntersects(geom)) { alertInfo("Le polygone ne doit pas se croiser : sommet conservé."); return; }
+  zone.setGeometry(geom);
+  updateZone();
+});
+
+// Rectangle : un coin se déplace, le coin opposé reste fixe, la forme reste rectangulaire.
+boxEditor(map, () => (zone && zone.get("shape") === "Rectangle" && !drawing ? zone : null), () => updateZone(), (hover) => {
+  cornerHover = hover;
+  setCursor();
+});
+
+function setZone(feature, shape) {
+  zoneSource.clear();
+  editable.clear();
+  feature.set("shape", shape);
+  zoneSource.addFeature(feature);
+  if (shape === "Polygon") editable.push(feature);
+  zone = feature;
   updateZone();
 }
 
-map.on("pm:create", (e) => { setZone(e.layer); setDrawButtons(null); });
+const drawStyle = new ol.style.Style({
+  stroke: new ol.style.Stroke({ color: ZONE_COLOR, width: 2, lineDash: [6, 4] }),
+  fill: new ol.style.Fill({ color: "rgba(31, 95, 174, 0.08)" }),
+  image: new ol.style.Circle({ radius: 4, fill: new ol.style.Fill({ color: ZONE_COLOR }) }),
+});
 
 function startDraw(shape) {
-  map.pm.disableDraw();
-  map.pm.enableDraw(shape, { snappable: false });
+  stopDraw();
+  drawing = new ol.interaction.Draw(shape === "Rectangle"
+    ? { type: "Circle", geometryFunction: ol.interaction.Draw.createBox(), style: drawStyle }
+    : { type: "Polygon", style: drawStyle });
+  drawing.on("drawend", (e) => {
+    const geom = e.feature.getGeometry();
+    stopDraw();
+    if (shape === "Polygon" && selfIntersects(geom)) {
+      alertInfo("Le polygone ne doit pas se croiser : tracé annulé, recommencez.");
+      return;
+    }
+    setZone(e.feature, shape);
+  });
+  map.addInteraction(drawing);
   setDrawButtons(shape);
+}
+function stopDraw() {
+  if (drawing) {
+    map.removeInteraction(drawing);
+    drawing = null;
+    drawEndedAt = Date.now();
+  }
+  setDrawButtons(null);
 }
 function setDrawButtons(shape) {
   $("draw-rect").classList.toggle("active", shape === "Rectangle");
@@ -45,24 +181,39 @@ function setDrawButtons(shape) {
 $("draw-rect").onclick = () => startDraw("Rectangle");
 $("draw-poly").onclick = () => startDraw("Polygon");
 $("clear").onclick = () => {
-  map.pm.disableDraw(); setDrawButtons(null);
-  if (zone) map.removeLayer(zone);
-  zone = null; updateZone();
+  stopDraw();
+  zoneSource.clear();
+  editable.clear();
+  zone = null;
+  updateZone();
 };
-
-// Aire géodésique approchée (formule sphérique), en km².
-function areaKm2(latlngs) {
-  const R = 6378137, rad = Math.PI / 180;
-  let s = 0;
-  for (let i = 0; i < latlngs.length; i++) {
-    const a = latlngs[i], b = latlngs[(i + 1) % latlngs.length];
-    s += (b.lng - a.lng) * rad * (2 + Math.sin(a.lat * rad) + Math.sin(b.lat * rad));
-  }
-  return Math.abs(s * R * R / 2) / 1e6;
-}
+// Échap abandonne le tracé ; Retour arrière retire le dernier sommet du polygone.
+document.addEventListener("keydown", (e) => {
+  if (!drawing || e.target.closest("input, select, textarea")) return;
+  if (e.key === "Escape") stopDraw();
+  else if (e.key === "Backspace") { drawing.removeLastPoint(); e.preventDefault(); }
+});
 
 function zoneGeometry() {
-  return zone.toGeoJSON().geometry;
+  return geojson.writeGeometryObject(zone.getGeometry(), { decimals: 7 });
+}
+
+// Emprise [ouest, sud, est, nord] (degrés) de la zone, sinon de la vue (éditeur de calage).
+function mainBounds() {
+  return ol.proj.transformExtent(zone ? zone.getGeometry().getExtent() : map.getView().calculateExtent(), MERC, WGS84);
+}
+
+// Projection des shapefiles ("EPSG:2949"…) pour la zone courante : celle de l'éditeur de calage.
+function outputCode() {
+  const [lon] = ol.proj.toLonLat(ol.extent.getCenter(zone.getGeometry().getExtent()));
+  return crsCode($("crs").value, lon);
+}
+
+// Emprises projetées, anneaux [[lat, lng], …].
+function setMainProjects(rings) {
+  projSource.clear();
+  projSource.addFeatures(rings.map((ring) =>
+    new ol.Feature(new ol.geom.Polygon([[...ring, ring[0]].map(([lat, lng]) => toMerc(lng, lat))]))));
 }
 
 async function updateZone() {
@@ -74,10 +225,10 @@ async function updateZone() {
     $("go").disabled = true;
     return;
   }
-  const ring = zone.getLatLngs()[0];
-  const km2 = areaKm2(ring);
-  const c = zone.getBounds().getCenter();
-  const inQc = L.latLngBounds(QC_BOUNDS).contains(c);
+  const geom = zone.getGeometry();
+  const km2 = ol.sphere.getArea(geom, { projection: MERC }) / 1e6;
+  const [lon, lat] = ol.proj.toLonLat(ol.extent.getCenter(geom.getExtent()));
+  const inQc = lon >= QC_BOUNDS[0] && lon <= QC_BOUNDS[2] && lat >= QC_BOUNDS[1] && lat <= QC_BOUNDS[3];
   let text = `Surface : ${km2.toLocaleString("fr-CA", { maximumFractionDigits: 2 })} km²`;
   let cls = "info";
   if (!inQc) { text += " — hors du Québec"; cls += " err"; }
@@ -88,7 +239,7 @@ async function updateZone() {
   $("go").disabled = !inQc || km2 > MAX_KM2;
   if (inQc) {
     try {
-      const r = await fetch(`/api/crs?lon=${c.lng}`);
+      const r = await fetch(`/api/crs?lon=${lon}`);
       const d = await r.json();
       info.textContent = `${text}\nProjection auto : ${d.name} (EPSG:${d.epsg})`;
       info.style.whiteSpace = "pre-line";
@@ -107,7 +258,7 @@ $("search").onsubmit = async (e) => {
     const res = await (await fetch(url, { headers: { "Accept-Language": "fr" } })).json();
     if (!res.length) { alertInfo("Adresse introuvable au Québec."); return; }
     const [s, n, w, e2] = res[0].boundingbox.map(Number);
-    map.fitBounds([[s, w], [n, e2]], { maxZoom: 16 });
+    map.getView().fit(extentMerc([w, s, e2, n]), { maxZoom: 16, padding: [20, 20, 20, 20] });
   } catch { alertInfo("Recherche indisponible."); }
 };
 function alertInfo(msg) {
@@ -158,7 +309,7 @@ $("panel").addEventListener("input", checkStale);
 
 $("go").onclick = async () => {
   if (!zone) return;
-  const body = requestBody();
+  const body = requestBody(), code = outputCode();
   if (!body.layers.length) { log("Sélectionnez au moins une couche.", "err"); return; }
   const total = body.profile.reduce((a, b) => a + b, 0);
   if (body.traffic && Math.abs(total - 100) > 0.5) {
@@ -179,7 +330,7 @@ $("go").onclick = async () => {
     if (!r.ok) throw new Error(d.detail ? JSON.stringify(d.detail) : r.statusText);
     const done = await poll(d.job_id);
     if (done) {
-      job = { id: d.job_id, params: JSON.stringify(body), zip: null };
+      job = { id: d.job_id, params: JSON.stringify(body), zip: null, code };
       renderProvenance(done.summary || {});
       $("make-zip").textContent = "Générer le ZIP";
       $("results").classList.remove("hidden");

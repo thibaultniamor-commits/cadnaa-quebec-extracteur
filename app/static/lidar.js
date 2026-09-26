@@ -14,37 +14,62 @@
   ];
   const NO_YEAR = "#9ca3af";
   const colorOf = (an) => (an ? CLASSES.find((c) => an <= c.max).color : NO_YEAR);
-
-  map.createPane("lidar-ombre").style.zIndex = 250;   // au-dessus du fond, sous les dalles
-  map.createPane("lidar-dalles").style.zIndex = 350;  // sous la zone d'étude (overlayPane : 400)
+  const rgba = (hex, a) => `rgba(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(", ")}, ${a})`;
 
   let fillOpacity = 0.3;
-  const style = (f) => ({
-    color: colorOf(f.properties.an), weight: 1, opacity: Math.min(1, fillOpacity + 0.4),
-    fillColor: colorOf(f.properties.an), fillOpacity,
+  let hovered = null;
+  const styles = new Map();   // styles partagés par couleur et épaisseur
+  const style = (f) => {
+    const color = colorOf(f.get("an")), width = f === hovered ? 2.5 : 1, key = `${color}|${width}`;
+    if (!styles.has(key)) {
+      styles.set(key, new ol.style.Style({
+        stroke: new ol.style.Stroke({ color: rgba(color, Math.min(1, fillOpacity + 0.4)), width }),
+        fill: new ol.style.Fill({ color: rgba(color, fillOpacity) }),
+      }));
+    }
+    return styles.get(key);
+  };
+
+  // Au-dessus du fond et du relief ombré, sous la zone d'étude.
+  const dallesSource = new ol.source.Vector();
+  const dalles = new ol.layer.Vector({ source: dallesSource, style, zIndex: 20 });
+  const ombre = new ol.layer.Tile({
+    zIndex: 10, visible: false, opacity: 0.6,
+    source: new ol.source.TileWMS({
+      url: "https://geoegl.msp.gouv.qc.ca/ws/mffpecofor.fcgi",
+      params: { LAYERS: "lidar_ombre", FORMAT: "image/png", TRANSPARENT: true, VERSION: "1.1.1" },
+      attributions: "LiDAR © MRNF (Forêt ouverte)",
+    }),
+  });
+  map.addLayer(ombre);
+  map.addLayer(dalles);
+  addOverlay(dalles, "Dalles LiDAR Forêt ouverte");
+  addOverlay(ombre, "Relief ombré LiDAR (MRNF)");
+
+  const tileAt = (pixel) => map.forEachFeatureAtPixel(pixel, (f) => f, { layerFilter: (l) => l === dalles });
+
+  map.on("pointermove", (e) => {
+    if (e.dragging) return;
+    const f = isDrawing() || !dalles.getVisible() ? null : tileAt(e.pixel);
+    if (f !== hovered) { hovered = f; dalles.changed(); }
+    tileHover = !!f;
+    setCursor();
   });
 
-  const dalles = L.geoJSON(null, {
-    pane: "lidar-dalles",
-    renderer: L.canvas({ pane: "lidar-dalles", padding: 0.3 }),
-    style,
-    onEachFeature: (f, layer) => {
-      layer.on("mouseover", () => layer.setStyle({ weight: 2.5 }));
-      layer.on("mouseout", () => dalles.resetStyle(layer));
-      layer.on("click", (e) => {
-        if (map.pm.globalDrawModeEnabled()) return;  // pas de bulle pendant le tracé de la zone
-        L.popup({ maxWidth: 320 }).setLatLng(e.latlng).setContent(popup(f.properties)).openOn(map);
-      });
-    },
-  }).addTo(map);
-
-  const ombre = L.tileLayer.wms("https://geoegl.msp.gouv.qc.ca/ws/mffpecofor.fcgi", {
-    layers: "lidar_ombre", format: "image/png", transparent: true, opacity: 0.6,
-    pane: "lidar-ombre", maxZoom: 19, attribution: "LiDAR © MRNF (Forêt ouverte)",
+  // Bulle d'un feuillet : dates d'acquisition et liens de téléchargement.
+  const bubble = document.createElement("div");
+  bubble.className = "map-popup";
+  const popupOverlay = new ol.Overlay({
+    element: bubble, positioning: "bottom-center", offset: [0, -10], autoPan: { animation: { duration: 200 } },
   });
-
-  layerControl.addOverlay(dalles, "Dalles LiDAR Forêt ouverte");
-  layerControl.addOverlay(ombre, "Relief ombré LiDAR (MRNF)");
+  map.addOverlay(popupOverlay);
+  map.on("singleclick", (e) => {
+    const f = isDrawing() || !dalles.getVisible() ? null : tileAt(e.pixel);
+    if (!f) { popupOverlay.setPosition(undefined); return; }
+    bubble.innerHTML = `<button type="button" class="map-popup-close" aria-label="Fermer">×</button>${popup(f.getProperties())}`;
+    bubble.querySelector("button").onclick = () => popupOverlay.setPosition(undefined);
+    popupOverlay.setPosition(e.coordinate);
+  });
 
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   function popup(p) {
@@ -60,32 +85,28 @@
   }
 
   // ---------- Panneau : légende, opacité, mise à jour ----------
-  const ctl = L.control({ position: "bottomleft" });
-  ctl.onAdd = () => {
-    const div = L.DomUtil.create("div", "lidar-ctl leaflet-bar");
-    div.innerHTML = `
-      <details open>
-        <summary data-tip="Feuillets 1/20 000 du MNT LiDAR 1 m diffusé par le MRNF (Forêt ouverte). Cliquer un feuillet pour ses dates d'acquisition et ses liens de téléchargement.">LiDAR Forêt ouverte</summary>
-        <div class="lidar-legend">
-          ${CLASSES.map((c) => `<span><i style="background:${c.color}"></i>${c.label}</span>`).join("")}
-        </div>
-        <p class="lidar-note">Année d'acquisition la plus récente du feuillet</p>
-        <label class="lidar-row" data-tip="Transparence des feuillets.">Dalles
-          <input id="lidar-op" type="range" min="0" max="100" value="${fillOpacity * 100}"></label>
-        <label class="lidar-row" data-tip="Transparence du relief ombré LiDAR (couche à activer dans le sélecteur de couches).">Relief
-          <input id="lidar-op-ombre" type="range" min="0" max="100" value="60"></label>
-        <div id="lidar-etat" class="lidar-note">Chargement de l'index…</div>
-        <button id="lidar-maj" type="button" class="ghost small-btn" data-tip="Vérifie auprès du MRNF si un nouvel index des dalles ou de nouvelles acquisitions ont été publiés, et les télécharge le cas échéant. La vérification se fait aussi automatiquement une fois par jour.">Mettre à jour</button>
-      </details>`;
-    L.DomEvent.disableClickPropagation(div);
-    L.DomEvent.disableScrollPropagation(div);
-    return div;
-  };
-  ctl.addTo(map);
+  const div = document.createElement("div");
+  div.className = "lidar-ctl ol-unselectable ol-control";
+  div.innerHTML = `
+    <details open>
+      <summary data-tip="Feuillets 1/20 000 du MNT LiDAR 1 m diffusé par le MRNF (Forêt ouverte). Cliquer un feuillet pour ses dates d'acquisition et ses liens de téléchargement.">LiDAR Forêt ouverte</summary>
+      <div class="lidar-legend">
+        ${CLASSES.map((c) => `<span><i style="background:${c.color}"></i>${c.label}</span>`).join("")}
+      </div>
+      <p class="lidar-note">Année d'acquisition la plus récente du feuillet</p>
+      <label class="lidar-row" data-tip="Transparence des feuillets.">Dalles
+        <input id="lidar-op" type="range" min="0" max="100" value="${fillOpacity * 100}"></label>
+      <label class="lidar-row" data-tip="Transparence du relief ombré LiDAR (couche à activer dans le sélecteur de couches).">Relief
+        <input id="lidar-op-ombre" type="range" min="0" max="100" value="60"></label>
+      <div id="lidar-etat" class="lidar-note">Chargement de l'index…</div>
+      <button id="lidar-maj" type="button" class="ghost small-btn" data-tip="Vérifie auprès du MRNF si un nouvel index des dalles ou de nouvelles acquisitions ont été publiés, et les télécharge le cas échéant. La vérification se fait aussi automatiquement une fois par jour.">Mettre à jour</button>
+    </details>`;
+  map.addControl(new ol.control.Control({ element: div }));
 
   $("lidar-op").oninput = (e) => {
     fillOpacity = Number(e.target.value) / 100;
-    dalles.setStyle(style);
+    styles.clear();
+    dalles.changed();
   };
   $("lidar-op-ombre").oninput = (e) => ombre.setOpacity(Number(e.target.value) / 100);
 
@@ -110,8 +131,10 @@
     if (!s.disponible || key === loadedIndex) return;
     const r = await fetch("/api/lidar/dalles");
     if (!r.ok) return;
-    dalles.clearLayers();
-    dalles.addData(await r.json());
+    const features = geojson.readFeatures(await r.json());
+    hovered = null;
+    dallesSource.clear();
+    dallesSource.addFeatures(features);
     loadedIndex = key;
   }
 

@@ -250,17 +250,24 @@ def plan_page(plan_id: str, page: int):
     return Response(plan["png"][page], media_type="image/png", headers={"Cache-Control": "max-age=3600"})
 
 
+# Projections possibles de la carte de l'éditeur de calage : celles des shapefiles.
+VIEW_EPSGS = set(range(crs.mtm_epsg(3), crs.mtm_epsg(10) + 1)) | {crs.LAMBERT_QC}
+
+
 class FitRequest(BaseModel):
     pairs: list[tuple[float, float, float, float]] = Field(max_length=50)  # x, y plan ; lat, lon carte
     method: Literal["similitude", "affine", "rigide"] = "similitude"
     bbox: tuple[float, float, float, float]
     unit_m: float | None = Field(None, gt=0)
+    view_epsg: int | None = None
 
 
 @app.post("/api/calage")
 def fit_plan(req: FitRequest):
     try:
-        return calage.fit(req.pairs, req.method, req.bbox, req.unit_m)
+        if req.view_epsg is not None and req.view_epsg not in VIEW_EPSGS:
+            raise ValueError("Projection de la carte inconnue.")
+        return calage.fit(req.pairs, req.method, req.bbox, req.unit_m, req.view_epsg)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
 

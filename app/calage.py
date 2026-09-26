@@ -37,10 +37,11 @@ def _fit(src, dst, method, scale=None):
     return np.column_stack([r, md - r @ ms])
 
 
-def fit(pairs, method, bbox, unit_m=None):
+def fit(pairs, method, bbox, unit_m=None, view_epsg=None):
     """pairs : [(x_plan, y_plan, lat, lon)] ; bbox : emprise du plan (unités plan) pour l'affine d'affichage.
 
     unit_m : mètres (réels pour un DXF, sur papier pour un PDF) par unité de plan, si connu.
+    view_epsg : projection de la carte de l'éditeur ; ajoute l'affine plan -> cette projection (affine_view).
     """
     need = MIN_POINTS[method]
     if len(pairs) < need:
@@ -86,4 +87,12 @@ def fit(pairs, method, bbox, unit_m=None):
     (a, b, c), *_ = np.linalg.lstsq(g, lon, rcond=None)
     (d, e, f), *_ = np.linalg.lstsq(g, lat, rcond=None)
     out["affine_ll"] = [float(v) for v in (a, b, c, d, e, f)]      # lon = a x + b y + c ; lat = d x + e y + f
+    if view_epsg:
+        if view_epsg == epsg:
+            vx, vy = mtm[:, 0], mtm[:, 1]
+        else:
+            vx, vy = Transformer.from_crs(epsg, view_epsg, always_xy=True).transform(mtm[:, 0], mtm[:, 1])
+        (a, b, c), *_ = np.linalg.lstsq(g, vx, rcond=None)
+        (d, e, f), *_ = np.linalg.lstsq(g, vy, rcond=None)
+        out["affine_view"] = [float(v) for v in (a, b, c, d, e, f)]  # X = a x + b y + c ; Y = d x + e y + f
     return out

@@ -4,8 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Extracteur CadnaA Québec</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@10.10.0/ol.css">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -255,7 +254,7 @@
           <label class="field">Nom <input id="pb-nom" type="text" maxlength="100"></label>
           <label class="field" data-tip="Facultatif. Renseigner les niveaux calcule la hauteur (niveaux × 3 m), modifiable ensuite.">Niveaux <input id="pb-niv" type="number" min="1" max="150" step="1"></label>
           <label class="field" data-tip="Hauteur du bâtiment au-dessus du sol (m), comme HAUTEUR des bâtiments existants.">Hauteur (m) <input id="pb-h" type="number" min="0.5" max="300" step="0.5"></label>
-          <p class="hint">Sommets déplaçables sur la carte ; clic droit sur un sommet pour le supprimer.</p>
+          <p class="hint">Sommets déplaçables sur la carte, avec accrochage ; Alt + clic sur un sommet pour le supprimer.</p>
           <button id="pb-del" type="button" class="ghost danger">Supprimer ce bâtiment</button>
         </div>
         <ul id="cal-list"></ul>
@@ -546,7 +545,10 @@
             <li><b>Rectangle</b> : cliquer un premier coin, puis le coin opposé.</li>
             <li><b>Polygone</b> : cliquer chaque sommet, puis cliquer le premier point pour fermer.
               Le contour ne doit pas se croiser.</li>
-            <li>Après le tracé, les sommets restent déplaçables à la souris. <b>Effacer</b> supprime la zone.</li>
+            <li>Après le tracé, les coins du rectangle et les sommets du polygone restent déplaçables à la souris.
+              Polygone : tirer un côté ajoute un sommet, clic droit (ou Alt + clic) sur un sommet le supprime.
+              Pendant le tracé, Retour arrière retire le dernier sommet et Échap abandonne.
+              <b>Effacer</b> supprime la zone.</li>
             <li>Le fond <b>Imagerie</b> (sélecteur en haut à droite de la carte) aide à caler la zone sur le terrain.</li>
           </ul>
           <h4>Dalles LiDAR Forêt ouverte</h4>
@@ -705,8 +707,11 @@
             sur l'imagerie avec le curseur d'<b>opacité</b> ; <b>Fond blanc transparent</b> ne garde que les traits du plan.</p>
           <h4>3. Saisir les bâtiments projetés</h4>
           <ul>
-            <li><b>Tracer</b> : cliquer les sommets ; double-clic ou clic sur le premier sommet pour fermer ;
-              Retour arrière annule le dernier sommet ; Échap abandonne.</li>
+            <li><b>Tracer</b> : cliquer les sommets ; double-clic, Entrée ou clic sur le premier sommet pour fermer ;
+              Retour arrière annule le dernier sommet ; Échap abandonne. Le curseur s'accroche aux sommets et aux
+              côtés du plan calé, des bâtiments existants et des autres emprises projetées.</li>
+            <li>Cliquer une emprise projetée la sélectionne : ses sommets se déplacent (avec le même accrochage),
+              tirer un côté ajoute un sommet, Alt + clic sur un sommet le supprime.</li>
             <li><b>Prendre sur le DXF</b> : cliquer à l'intérieur d'une polyligne fermée du plan.</li>
             <li>Pour chaque bâtiment : nom, niveaux (hauteur = niveaux × 3 m) ou hauteur directe. L'altitude du sol
               est prise sur le MNT (médiane sous l'emprise).</li>
@@ -831,8 +836,9 @@
         "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/" } }
   </script>
   <script type="module" src="/static/viewer.js"></script>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/ol@10.10.0/dist/ol.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/proj4@2.22.0/dist/proj4.js"></script>
+  <script src="/static/carto.js"></script>
   <script src="/static/app.js"></script>
   <script src="/static/lidar.js"></script>
   <script src="/static/plan.js"></script>
