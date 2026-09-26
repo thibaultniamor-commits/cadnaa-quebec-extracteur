@@ -293,6 +293,103 @@ function requestBody() {
   };
 }
 
+// ---------- Fenêtre de progression de l'extraction ----------
+// Le serveur donne la part [début, fin] de l'étape en cours ; la barre avance doucement dans l'étape
+// sans jamais la dépasser, pour ne pas sembler figée pendant les longs téléchargements.
+const progress = (() => {
+  const dlg = $("progress");
+  let stage = [0, 0], since = 0, shown = 0, t0 = 0, running = false;
+  // Pas de fermeture par Échap pendant l'extraction (elle continue sur le serveur).
+  dlg.addEventListener("cancel", (e) => { if (running) e.preventDefault(); });
+  $("pg-close").onclick = () => dlg.close();
+
+  function render() {
+    const pct = Math.floor(shown * 100);
+    $("pg-fill").style.width = `${shown * 100}%`;
+    $("pg-pct").textContent = `${pct} %`;
+    dlg.querySelector(".pg-bar").setAttribute("aria-valuenow", pct);
+    const s = Math.round((performance.now() - t0) / 1000);
+    $("pg-time").textContent = s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")} s`;
+  }
+  function frame() {
+    if (!running) return;
+    const [a, b] = stage, w = b - a;
+    const tau = 3000 + 60000 * w;   // ms : les étapes lourdes avancent plus lentement
+    shown = Math.max(shown, a + w * 0.92 * (1 - Math.exp(-(performance.now() - since) / tau)));
+    render();
+    requestAnimationFrame(frame);
+  }
+  function current() { return $("pg-log").querySelector("li.current"); }
+  function settle() { const li = current(); if (li) li.classList.remove("current"); }
+
+  return {
+    open() {
+      stage = [0, 0]; since = t0 = performance.now(); shown = 0; running = true;
+      dlg.classList.remove("done", "failed");
+      $("pg-title").textContent = "Extraction en cours";
+      $("pg-step").textContent = "Préparation…";
+      $("pg-log").innerHTML = "";
+      $("pg-note").classList.remove("hidden");
+      $("pg-actions").classList.add("hidden");
+      if (!dlg.open) dlg.showModal();
+      requestAnimationFrame(frame);
+    },
+    stage(bounds) {
+      if (!Array.isArray(bounds)) return;   // serveur sans avancement : la barre reste indéterminée
+      const [a, b] = bounds;
+      if (a !== stage[0] || b !== stage[1]) { stage = [a, b]; since = performance.now(); shown = Math.max(shown, a); }
+    },
+    // Nouveau message : l'étape précédente est faite, celle-ci est en cours.
+    step(msg) {
+      settle();
+      const li = document.createElement("li");
+      li.textContent = msg;
+      li.className = /indisponible|insuffisant|repli/i.test(msg) ? "warn" : "current";
+      $("pg-log").appendChild(li);
+      li.scrollIntoView({ block: "nearest" });
+      $("pg-step").textContent = msg;
+    },
+    async done(msg) {
+      running = false;
+      settle();
+      shown = 1;
+      render();
+      dlg.classList.add("done");
+      $("pg-title").textContent = "Extraction terminée";
+      $("pg-step").textContent = msg;
+      await new Promise((res) => setTimeout(res, 700));
+      dlg.close();
+    },
+    fail(msg) {
+      running = false;
+      settle();
+      render();
+      const li = document.createElement("li");
+      li.textContent = msg;
+      li.className = "err";
+      $("pg-log").appendChild(li);
+      li.scrollIntoView({ block: "nearest" });
+      dlg.classList.add("failed");
+      $("pg-title").textContent = "Extraction interrompue";
+      $("pg-step").textContent = msg;
+      $("pg-note").classList.add("hidden");
+      $("pg-actions").classList.remove("hidden");
+      $("pg-close").focus();
+    },
+    // Copie du déroulé dans le panneau (journal replié).
+    keep() {
+      $("log-steps").innerHTML = "";
+      $("pg-log").querySelectorAll("li").forEach((li) => {
+        const copy = document.createElement("li");
+        copy.textContent = li.textContent;
+        if (li.classList.contains("warn") || li.classList.contains("err")) copy.className = li.className;
+        $("log-steps").appendChild(copy);
+      });
+      $("log-box").classList.remove("hidden");
+    },
+  };
+})();
+
 // Extraction courante : sert à l'aperçu 3D et à la génération du ZIP.
 let job = null;   // { id, params, zip }
 
@@ -318,10 +415,13 @@ $("go").onclick = async () => {
   }
   job = null;
   $("log").innerHTML = "";
+  $("log-box").classList.add("hidden");
+  $("log-box").open = false;
   $("results").classList.add("hidden");
   $("proj-section").classList.add("hidden");
   $("go").disabled = true;
   $("go").textContent = "Extraction en cours…";
+  progress.open();
   try {
     const r = await fetch("/api/extract", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
@@ -329,7 +429,9 @@ $("go").onclick = async () => {
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail ? JSON.stringify(d.detail) : r.statusText);
     const done = await poll(d.job_id);
+    progress.keep();
     if (done) {
+      await progress.done(`Données prêtes en ${done.summary && done.summary.duree_s} s : ouverture de l'aperçu 3D.`);
       job = { id: d.job_id, params: JSON.stringify(body), zip: null, code };
       renderProvenance(done.summary || {});
       $("make-zip").textContent = "Générer le ZIP";
@@ -339,6 +441,8 @@ $("go").onclick = async () => {
       window.openViewer(job.id);
     }
   } catch (err) {
+    progress.fail(`Erreur : ${err.message}`);
+    progress.keep();
     log(`Erreur : ${err.message}`, "err");
   } finally {
     $("go").textContent = "Extraire et prévisualiser";
@@ -350,14 +454,19 @@ async function poll(jobId) {
   let shown = 0;
   for (;;) {
     const d = await (await fetch(`/api/jobs/${jobId}`)).json();
-    d.messages.slice(shown).forEach((m) => log(m));
+    d.messages.slice(shown).forEach((m) => progress.step(m));
     shown = d.messages.length;
+    progress.stage(d.progress);
     if (d.status === "termine") {
       log("Données prêtes : vérifiez l'aperçu 3D, puis générez le ZIP.", "ok");
       return d;
     }
-    if (d.status === "erreur") { log(d.error, "err"); return false; }
-    await new Promise((res) => setTimeout(res, 1500));
+    if (d.status === "erreur") {
+      progress.fail(d.error);
+      log(d.error, "err");
+      return false;
+    }
+    await new Promise((res) => setTimeout(res, 1000));
   }
 }
 

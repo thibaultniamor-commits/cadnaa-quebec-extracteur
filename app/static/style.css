@@ -68,6 +68,56 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 #log li { margin: 2px 0; }
 #log li.err { color: var(--err); }
 #log li.ok { color: var(--ok); font-weight: 600; }
+#log:empty { display: none; }
+.log-box { margin: 10px 0 0; font-size: 12.5px; }
+.log-box summary { cursor: pointer; color: var(--muted); }
+#log-steps { margin: 6px 0 0; padding-left: 18px; color: var(--muted); }
+#log-steps li { margin: 2px 0; }
+#log-steps li.err { color: var(--err); }
+#log-steps li.warn { color: var(--warn); }
+
+/* ---------- Progression de l'extraction ---------- */
+#progress {
+  width: min(560px, calc(100vw - 32px)); padding: 22px 24px 18px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: var(--fg);
+  box-shadow: 0 16px 50px rgba(0, 0, 0, .35);
+}
+#progress::backdrop { background: rgba(10, 14, 20, .55); backdrop-filter: blur(2px); }
+#progress h2 { margin: 0 0 4px; font-size: 16px; }
+#progress.failed h2 { color: var(--err); }
+.pg-step { margin: 0 0 14px; min-height: 2.9em; font-size: 14px; }
+.pg-bar { height: 10px; border-radius: 5px; background: var(--line); overflow: hidden; }
+#pg-fill {
+  width: 0; height: 100%; border-radius: 5px; background: var(--accent);
+  background-image: linear-gradient(90deg, rgba(255, 255, 255, 0) 0, rgba(255, 255, 255, .35) 50%, rgba(255, 255, 255, 0) 100%);
+  background-size: 200px 100%; background-repeat: no-repeat; animation: pg-shine 1.6s linear infinite;
+}
+#progress.done #pg-fill { background-color: var(--ok); animation: none; background-image: none; }
+#progress.failed #pg-fill { background-color: var(--err); animation: none; background-image: none; }
+@keyframes pg-shine { from { background-position: -200px 0; } to { background-position: calc(100% + 200px) 0; } }
+.pg-meta { display: flex; justify-content: space-between; margin: 6px 0 12px; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+#pg-log {
+  list-style: none; margin: 0; padding: 8px 10px; height: 150px; overflow-y: auto;
+  border: 1px solid var(--line); border-radius: 8px; font-size: 12.5px; color: var(--muted);
+}
+#pg-log li { position: relative; padding: 2px 0 2px 20px; animation: pg-in .25s ease-out; }
+#pg-log li::before { content: "✓"; position: absolute; left: 2px; color: var(--ok); }
+#pg-log li.current { color: var(--fg); font-weight: 600; }
+#pg-log li.current::before {
+  content: ""; top: 6px; left: 2px; width: 9px; height: 9px; border: 2px solid var(--accent);
+  border-right-color: transparent; border-radius: 50%; animation: pg-spin .8s linear infinite;
+}
+#pg-log li.warn { color: var(--warn); }
+#pg-log li.warn::before { content: "!"; color: var(--warn); font-weight: 700; }
+#pg-log li.err { color: var(--err); }
+#pg-log li.err::before { content: "✕"; color: var(--err); animation: none; border: 0; top: 2px; width: auto; height: auto; }
+@keyframes pg-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes pg-spin { to { transform: rotate(360deg); } }
+.pg-note { margin: 10px 0 0; font-size: 12px; color: var(--muted); }
+#pg-actions { margin-top: 12px; justify-content: flex-end; }
+@media (prefers-reduced-motion: reduce) {
+  #pg-fill, #pg-log li, #pg-log li.current::before { animation: none; }
+}
 #results { margin-top: 10px; display: grid; gap: 8px; }
 #open-3d { width: 100%; padding: 8px; font-weight: 600; }
 .prov { font-size: 12.5px; padding: 8px 10px; border-left: 3px solid var(--ok); background: var(--line); border-radius: 0 6px 6px 0; }

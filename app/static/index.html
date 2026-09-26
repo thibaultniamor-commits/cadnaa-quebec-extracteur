@@ -115,6 +115,10 @@
       <h2><span class="step">4</span> Extraction et validation</h2>
       <button id="go" type="button" class="primary" disabled data-tip="Télécharge et calcule toutes les couches, puis ouvre l'aperçu 3D. Aucun ZIP n'est encore créé.">Extraire et prévisualiser</button>
       <ol id="log"></ol>
+      <details id="log-box" class="log-box hidden">
+        <summary data-tip="Étapes de la dernière extraction, avec les sources utilisées et les éventuels replis.">Journal de l'extraction</summary>
+        <ol id="log-steps"></ol>
+      </details>
       <div id="results" class="hidden">
         <div id="provenance" class="prov"></div>
         <button id="open-3d" type="button" data-tip="Rouvre la vue 3D : terrain, bâtiments extrudés, routes, courbes. Vérifiez les hauteurs et les débits avant de générer le ZIP.">Aperçu 3D (validation)</button>
@@ -261,6 +265,19 @@
       </div>
     </div>
   </div>
+
+  <dialog id="progress" aria-labelledby="pg-title" aria-describedby="pg-step">
+    <h2 id="pg-title">Extraction en cours</h2>
+    <p id="pg-step" class="pg-step" aria-live="polite">Préparation…</p>
+    <div class="pg-bar" role="progressbar" aria-labelledby="pg-title" aria-valuemin="0" aria-valuemax="100">
+      <div id="pg-fill"></div>
+    </div>
+    <div class="pg-meta"><span id="pg-pct">0 %</span><span id="pg-time">0 s</span></div>
+    <ol id="pg-log"></ol>
+    <p id="pg-note" class="pg-note">Les données sont téléchargées auprès des producteurs officiels : la durée dépend
+      de la taille de la zone et de leurs serveurs.</p>
+    <div id="pg-actions" class="row hidden"><button id="pg-close" type="button" class="primary">Fermer</button></div>
+  </dialog>
 
   <dialog id="help" aria-labelledby="help-title">
     <div class="help-head">

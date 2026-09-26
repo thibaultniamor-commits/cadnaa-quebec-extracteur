@@ -111,7 +111,7 @@ def extract(req: ExtractRequest):
     if not layers:
         raise HTTPException(400, "Aucune couche sélectionnée.")
     job_id = uuid.uuid4().hex[:12]
-    job = {"status": "en_cours", "messages": [], "summary": None, "error": None, "extraction": None,
+    job = {"status": "en_cours", "messages": [], "progress": [0.0, 0.0], "summary": None, "error": None, "extraction": None,
            "preview": None, "file": None, "lock": threading.Lock()}
     with _lock:
         _jobs[job_id] = job
@@ -125,7 +125,8 @@ def extract(req: ExtractRequest):
 
 def _run(job, opts):
     try:
-        ex = pipeline.extract(opts, OUTPUT, progress=job["messages"].append)
+        ex = pipeline.extract(opts, OUTPUT, progress=job["messages"].append,
+                              step=lambda start, end: job.update(progress=[round(start, 4), round(end, 4)]))
         job.update(status="termine", summary=ex.summary, extraction=ex, preview=ex.preview_path)
     except ValueError as e:
         job.update(status="erreur", error=str(e))
@@ -144,7 +145,7 @@ def _job(job_id):
 @app.get("/api/jobs/{job_id}")
 def status(job_id: str):
     job = _job(job_id)
-    return {k: job[k] for k in ("status", "messages", "summary", "error")}
+    return {k: job[k] for k in ("status", "messages", "progress", "summary", "error")}
 
 
 def _done(job_id):

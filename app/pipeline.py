@@ -95,7 +95,44 @@ class Extraction:
     projets_mode: str = "separe"                # separe : batiments_projetes.shp ; fusion : dans batiments.shp
 
 
-def extract(opts: Options, out_dir: Path, progress=lambda msg: None) -> Extraction:
+# Durée relative des étapes de l'extraction, pour la barre de progression.
+STEP_WEIGHTS = {"zone": 1, "mnt": 30, "emprises": 15, "hauteurs": 20, "courbes": 8, "routes": 10, "debits": 5,
+                "osm": 10, "apercu": 6}
+
+
+class _Steps:
+    """Avancement : chaque étape couvre une part de 0 à 1 selon son poids ; step(start, end) à l'entrée d'une étape."""
+
+    def __init__(self, opts, step):
+        keys = ["zone"]
+        if "topo" in opts.layers:
+            keys.append("mnt")
+        if "batiments" in opts.layers:
+            keys += ["emprises", "hauteurs"]
+        if "topo" in opts.layers:
+            keys.append("courbes")
+        if "routes" in opts.layers:
+            keys.append("routes")
+            if opts.traffic:
+                keys.append("debits")
+            if opts.road_attrs:
+                keys.append("osm")
+        keys.append("apercu")
+        total = sum(STEP_WEIGHTS[k] for k in keys)
+        self.bounds, acc = {}, 0
+        for k in keys:
+            self.bounds[k] = (acc / total, (acc + STEP_WEIGHTS[k]) / total)
+            acc += STEP_WEIGHTS[k]
+        self.step = step
+
+    def __call__(self, key):
+        self.step(*self.bounds[key])
+
+
+def extract(opts: Options, out_dir: Path, progress=lambda msg: None, step=lambda start, end: None) -> Extraction:
+    """progress(message) : étapes lisibles ; step(start, end) : part de l'extraction couverte par l'étape en cours."""
+    steps = _Steps(opts, step)
+    steps("zone")
     """Télécharge et calcule toutes les couches, puis écrit les données de l'aperçu 3D."""
     t0 = time.time()
     zone_ll = shape(opts.geometry)
@@ -122,6 +159,7 @@ def extract(opts: Options, out_dir: Path, progress=lambda msg: None) -> Extracti
         res = opts.dem_resolution or auto_resolution(area_km2)
         pad = TERRAIN_MARGIN_M + 3 * res + opts.smoothing_m * 3
         grid = topo.Grid.covering(zone.buffer(pad).bounds, res, f"EPSG:{epsg}")
+        steps("mnt")
         progress(f"Topographie : lecture du MNT à {res:g} m ({grid.width}×{grid.height} px)…")
         dtm, info = topo.build_dtm(bbox_ll, grid, opts.dem_source, progress)
         ex.dem_info = info
@@ -134,8 +172,10 @@ def extract(opts: Options, out_dir: Path, progress=lambda msg: None) -> Extracti
                        equidistance_m=opts.contour_interval)
 
     if "batiments" in opts.layers:
+        steps("emprises")
         b, fp = _footprints(zone_ll, zone, epsg, opts.footprint_source, progress)
         summary["emprises"] = fp
+        steps("hauteurs")
         progress(f"Bâtiments : {len(b)} emprises. Calcul des hauteurs LiDAR…")
         h = ground = None
         if len(b):
@@ -153,6 +193,7 @@ def extract(opts: Options, out_dir: Path, progress=lambda msg: None) -> Extracti
         progress(f"Bâtiments : {len(b)} — sources des hauteurs {counts}")
 
     if ex.dtm is not None:
+        steps("courbes")
         progress("Topographie : calcul des courbes de niveau…")
         tz = terrain_zone(zone, ex.buildings)
         lines = topo.contours(ex.dtm, ex.grid, opts.contour_interval, tz, opts.smoothing_m)
@@ -163,6 +204,7 @@ def extract(opts: Options, out_dir: Path, progress=lambda msg: None) -> Extracti
         progress(f"Topographie : {len(ex.contours)} courbes de niveau.")
 
     if "routes" in opts.layers:
+        steps("routes")
         progress("Routes : interrogation AQréseau+" + (" et OpenStreetMap…" if opts.road_attrs else "…"))
         pool = ThreadPoolExecutor(1)
         osm_ways = pool.submit(osmroads.fetch, zone_ll) if opts.road_attrs else None
@@ -171,6 +213,7 @@ def extract(opts: Options, out_dir: Path, progress=lambda msg: None) -> Extracti
         summary.update(routes=len(r), routes_km=round(float(r.geometry.length.sum()) / 1000, 2))
         progress(f"Routes : {len(r)} tronçons ({summary['routes_km']} km).")
         if opts.traffic:
+            steps("debits")
             progress("Débits : sections de trafic MTMD…")
             sections = traffic.fetch(zone_ll).to_crs(epsg)
             r, sections = traffic.attach(r, sections, zone)
@@ -183,15 +226,18 @@ def extract(opts: Options, out_dir: Path, progress=lambda msg: None) -> Extracti
             r = _hourly_flows(r, opts.profile)
             summary["profil"] = dict(zip((name for _, name, _ in PERIODS), opts.profile))
         if opts.road_attrs:
+            steps("osm")
             r = _road_attrs(r, osm_ways, epsg, summary, progress)
         ex.roads = r
 
+    steps("apercu")
     progress("Aperçu 3D : préparation…")
     ex.terrain = preview.terrain(ex.dtm, ex.grid, terrain_zone(zone, ex.buildings), bbox_ll, epsg)
     data = preview.build(zone, ex.terrain, buildings=ex.buildings, roads=ex.roads, contours=ex.contours,
                          stats=summary)
     preview.write(ex.preview_path, data)
     summary["duree_s"] = round(time.time() - t0, 1)
+    step(1.0, 1.0)
     progress(f"Extraction terminée en {summary['duree_s']} s.")
     return ex
 
